@@ -118,9 +118,10 @@ export default class AiAutoCorrectExtension extends Extension {
         this._client?.cancel();
         if (this._iconResetId)
             GLib.Source.remove(this._iconResetId);
+        this._icon?.destroy();
+        this._icon = null;
         this._indicator?.destroy();
         this._indicator = null;
-        this._icon = null;
         this._iconResetId = null;
         this._keyboard = null;
         this._clipboard = null;
