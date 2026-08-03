@@ -53,8 +53,6 @@ function openAiBody(model, prompt, text, mode, cerebras = false) {
             {role: 'system', content: prompt},
             {role: 'user', content: payload(text, mode)},
         ],
-        temperature: 0,
-        top_p: 1,
     };
     body[cerebras ? 'max_completion_tokens' : 'max_tokens'] = maxTokens(text);
     return body;
@@ -93,10 +91,14 @@ export class AiClient {
         this._cancellable = new Gio.Cancellable();
         const provider = this._settings.get_string('provider');
         const prompt = this._settings.get_string(mode === 'rewrite' ? 'prompt-rewrite' : 'prompt-correct');
+        if (provider === 'openai')
+            return this._openAi(text, mode, prompt);
         if (provider === 'gemini')
             return this._gemini(text, mode, prompt);
         if (provider === 'openrouter')
             return this._openRouter(text, mode, prompt);
+        if (provider === 'vercel')
+            return this._vercel(text, mode, prompt);
         if (provider === 'cerebras')
             return this._cerebras(text, mode, prompt);
         return this._groq(text, mode, prompt);
@@ -124,6 +126,15 @@ export class AiClient {
         return outputOrError(result);
     }
 
+    async _openAi(text, mode, prompt) {
+        const key = this._required('openai-api-key', 'OpenAI');
+        const result = await requestJson(this._session,
+            'https://api.openai.com/v1/chat/completions',
+            {Authorization: `Bearer ${key}`},
+            openAiBody(this._settings.get_string('openai-model'), prompt, text, mode), this._cancellable);
+        return outputOrError(result);
+    }
+
     async _gemini(text, mode, prompt) {
         const key = this._required('gemini-api-key', 'Gemini');
         const model = encodeURIComponent(this._settings.get_string('gemini-model'));
@@ -146,6 +157,15 @@ export class AiClient {
             'https://openrouter.ai/api/v1/chat/completions',
             {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
             openAiBody(this._settings.get_string('openrouter-model'), prompt, text, mode), this._cancellable);
+        return outputOrError(result);
+    }
+
+    async _vercel(text, mode, prompt) {
+        const key = this._required('vercel-api-key', 'Vercel AI Gateway');
+        const result = await requestJson(this._session,
+            'https://ai-gateway.vercel.sh/v1/chat/completions',
+            {Authorization: `Bearer ${key}`},
+            openAiBody(this._settings.get_string('vercel-model'), prompt, text, mode), this._cancellable);
         return outputOrError(result);
     }
 

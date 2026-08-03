@@ -1,7 +1,7 @@
 {
   "uuid": "ai-autocorrect@ubai.dev",
   "name": "PromptPaste",
-  "description": "Use AI on selected text: correct, rewrite, translate, summarize, or run custom prompts. Supports Groq, Gemini, OpenRouter and Cerebras. Text is sent only when used and pasted back.",
+  "description": "Use AI on selected text: correct, rewrite, translate, summarize, or run custom prompts. Six providers include OpenAI and Vercel. Text is sent only when used and pasted back.",
   "shell-version": ["50"],
   "settings-schema": "org.gnome.shell.extensions.ai-autocorrect",
   "url": "https://github.com/ubaimutl/PromptPaste"

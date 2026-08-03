@@ -5,7 +5,7 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-const PROVIDERS = ['groq', 'gemini', 'openrouter', 'cerebras'];
+const PROVIDERS = ['groq', 'gemini', 'openrouter', 'cerebras', 'openai', 'vercel'];
 
 function entry(group, settings, key, title, password = false) {
     const row = password ? new Adw.PasswordEntryRow({title}) : new Adw.EntryRow({title});
@@ -19,7 +19,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
 
         const providerGroup = new Adw.PreferencesGroup({title: 'Provider'});
-        const model = Gtk.StringList.new(['Groq', 'Gemini', 'OpenRouter', 'Cerebras']);
+        const model = Gtk.StringList.new(['Groq', 'Gemini', 'OpenRouter', 'Cerebras', 'OpenAI', 'Vercel AI Gateway']);
         const provider = new Adw.ComboRow({title: 'Active provider', model});
         provider.selected = Math.max(0, PROVIDERS.indexOf(settings.get_string('provider')));
         provider.connect('notify::selected', () => settings.set_string('provider', PROVIDERS[provider.selected]));
@@ -27,7 +27,14 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         page.add(providerGroup);
 
         const keys = new Adw.PreferencesGroup({title: 'API keys and models'});
-        for (const [name, label] of [['groq', 'Groq'], ['gemini', 'Gemini'], ['openrouter', 'OpenRouter'], ['cerebras', 'Cerebras']]) {
+        for (const [name, label] of [
+            ['groq', 'Groq'],
+            ['gemini', 'Gemini'],
+            ['openrouter', 'OpenRouter'],
+            ['cerebras', 'Cerebras'],
+            ['openai', 'OpenAI'],
+            ['vercel', 'Vercel AI Gateway'],
+        ]) {
             entry(keys, settings, `${name}-api-key`, `${label} API key`, true);
             entry(keys, settings, `${name}-model`, `${label} model`);
         }

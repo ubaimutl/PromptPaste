@@ -4,10 +4,14 @@
     <key name="provider" type="s"><default>'groq'</default></key>
     <key name="groq-api-key" type="s"><default>''</default></key>
     <key name="groq-model" type="s"><default>'openai/gpt-oss-20b'</default></key>
+    <key name="openai-api-key" type="s"><default>''</default></key>
+    <key name="openai-model" type="s"><default>'gpt-4.1-mini'</default></key>
     <key name="gemini-api-key" type="s"><default>''</default></key>
     <key name="gemini-model" type="s"><default>'gemini-3.5-flash-lite'</default></key>
     <key name="openrouter-api-key" type="s"><default>''</default></key>
     <key name="openrouter-model" type="s"><default>'openrouter/free'</default></key>
+    <key name="vercel-api-key" type="s"><default>''</default></key>
+    <key name="vercel-model" type="s"><default>'openai/gpt-5.4-mini'</default></key>
     <key name="cerebras-api-key" type="s"><default>''</default></key>
     <key name="cerebras-model" type="s"><default>'gpt-oss-120b'</default></key>
     <key name="prompt-correct" type="s">
