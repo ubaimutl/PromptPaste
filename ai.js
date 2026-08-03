@@ -1,8 +1,6 @@
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Soup from 'gi://Soup?version=3.0';
-
-const RETRYABLE = new Set([408, 429, 502, 503, 504, 529]);
+import Soup from 'gi://Soup';
 
 function payload(text, mode) {
     const action = mode === 'rewrite' ? 'Rewrite' : 'Correct';
@@ -77,8 +75,17 @@ export class AiClient {
     }
 
     cancel() {
-        this._cancellable?.cancel();
-        this._cancellable = null;
+        if (this._cancellable) {
+            this._cancellable.cancel();
+            this._cancellable = null;
+        }
+    }
+
+    destroy() {
+        this.cancel();
+        this._session.abort();
+        this._session = null;
+        this._settings = null;
     }
 
     async transform(text, mode) {
@@ -135,23 +142,11 @@ export class AiClient {
 
     async _openRouter(text, mode, prompt) {
         const key = this._required('openrouter-api-key', 'OpenRouter');
-        for (let attempt = 0; attempt < 2; attempt++) {
-            const result = await requestJson(this._session,
-                'https://openrouter.ai/api/v1/chat/completions',
-                {Authorization: `Bearer ${key}`, 'X-Title': 'AI AutoCorrect'},
-                openAiBody(this._settings.get_string('openrouter-model'), prompt, text, mode), this._cancellable);
-            if (result.data?.choices?.[0]?.message?.content)
-                return outputOrError(result);
-            if (attempt === 0 && RETRYABLE.has(result.status)) {
-                await new Promise(resolve => GLib.timeout_add(GLib.PRIORITY_DEFAULT, 700, () => {
-                    resolve();
-                    return GLib.SOURCE_REMOVE;
-                }));
-                continue;
-            }
-            return outputOrError(result);
-        }
-        throw new Error('OpenRouter request failed.');
+        const result = await requestJson(this._session,
+            'https://openrouter.ai/api/v1/chat/completions',
+            {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
+            openAiBody(this._settings.get_string('openrouter-model'), prompt, text, mode), this._cancellable);
+        return outputOrError(result);
     }
 
     async _cerebras(text, mode, prompt) {

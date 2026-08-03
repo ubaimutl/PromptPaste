@@ -1,8 +1,8 @@
 {
   "uuid": "ai-autocorrect@ubai.dev",
-  "name": "AI AutoCorrect",
+  "name": "PromptPaste",
   "description": "Use AI on selected text anywhere in GNOME. Correct, rewrite, translate, summarize, or create your own actions by changing the prompts. The result is pasted back automatically.\n\nSupports Groq, Gemini, OpenRouter, and Cerebras. Add your own API key in Settings. Get one from console.groq.com/keys, ai.google.dev/aistudio, openrouter.ai/keys, or cloud.cerebras.ai.\n\nClipboard text is sent to your chosen provider only when you run an action.",
-  "shell-version": ["47", "48", "49", "50"],
+  "shell-version": ["50"],
   "settings-schema": "org.gnome.shell.extensions.ai-autocorrect",
   "url": "https://github.com/ubaimutl/PromptPaste"
 }

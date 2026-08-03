@@ -12,7 +12,7 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {AiClient} from './ai.js';
 
-export default class AiAutoCorrectExtension extends Extension {
+export default class PromptPasteExtension extends Extension {
     enable() {
         this._settings = this.getSettings();
         this._client = new AiClient(this._settings);
@@ -46,6 +46,26 @@ export default class AiAutoCorrectExtension extends Extension {
         this._addShortcut('rewrite-shortcut', 'rewrite');
     }
 
+    disable() {
+        Main.wm.removeKeybinding('correct-shortcut');
+        Main.wm.removeKeybinding('rewrite-shortcut');
+        this._client.destroy();
+        this._client = null;
+
+        if (this._iconResetId) {
+            GLib.Source.remove(this._iconResetId);
+            this._iconResetId = null;
+        }
+
+        this._icon.destroy();
+        this._icon = null;
+        this._indicator.destroy();
+        this._indicator = null;
+        this._keyboard = null;
+        this._clipboard = null;
+        this._settings = null;
+    }
+
     _addShortcut(name, mode) {
         Main.wm.addKeybinding(name, this._settings,
             Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL,
@@ -66,9 +86,10 @@ export default class AiAutoCorrectExtension extends Extension {
             this._paste();
             this._setIcon('emblem-ok-symbolic', 1200);
         } catch (error) {
+            if (error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                return;
             this._setIcon('tools-check-spelling-symbolic');
-            if (!error.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
-                Main.notifyError('AI AutoCorrect', error.message ?? String(error));
+            Main.notifyError('PromptPaste', error.message ?? String(error));
         } finally {
             this._busy = false;
         }
@@ -96,36 +117,17 @@ export default class AiAutoCorrectExtension extends Extension {
     }
 
     _setIcon(name, resetAfter = 0) {
-        if (this._icon)
-            this._icon.icon_name = name;
+        this._icon.icon_name = name;
         if (this._iconResetId) {
             GLib.Source.remove(this._iconResetId);
             this._iconResetId = null;
         }
         if (resetAfter) {
             this._iconResetId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, resetAfter, () => {
-                if (this._icon)
-                    this._icon.icon_name = 'tools-check-spelling-symbolic';
+                this._icon.icon_name = 'tools-check-spelling-symbolic';
                 this._iconResetId = null;
                 return GLib.SOURCE_REMOVE;
             });
         }
-    }
-
-    disable() {
-        Main.wm.removeKeybinding('correct-shortcut');
-        Main.wm.removeKeybinding('rewrite-shortcut');
-        this._client?.cancel();
-        if (this._iconResetId)
-            GLib.Source.remove(this._iconResetId);
-        this._icon?.destroy();
-        this._icon = null;
-        this._indicator?.destroy();
-        this._indicator = null;
-        this._iconResetId = null;
-        this._keyboard = null;
-        this._clipboard = null;
-        this._client = null;
-        this._settings = null;
     }
 }

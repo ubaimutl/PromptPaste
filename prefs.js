@@ -11,10 +11,9 @@ function entry(group, settings, key, title, password = false) {
     const row = password ? new Adw.PasswordEntryRow({title}) : new Adw.EntryRow({title});
     settings.bind(key, row, 'text', Gio.SettingsBindFlags.DEFAULT);
     group.add(row);
-    return row;
 }
 
-export default class AiAutoCorrectPreferences extends ExtensionPreferences {
+export default class PromptPastePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
         const page = new Adw.PreferencesPage();
