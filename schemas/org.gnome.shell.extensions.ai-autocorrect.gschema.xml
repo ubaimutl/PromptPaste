@@ -2,6 +2,8 @@
 <schemalist>
   <schema id="org.gnome.shell.extensions.ai-autocorrect" path="/org/gnome/shell/extensions/ai-autocorrect/">
     <key name="provider" type="s"><default>'groq'</default></key>
+    <key name="ollama-url" type="s"><default>'http://127.0.0.1:11434'</default></key>
+    <key name="ollama-model" type="s"><default>'qwen3:4b'</default></key>
     <key name="groq-api-key" type="s"><default>''</default></key>
     <key name="groq-model" type="s"><default>'openai/gpt-oss-20b'</default></key>
     <key name="openai-api-key" type="s"><default>''</default></key>
@@ -20,7 +22,13 @@
     <key name="prompt-rewrite" type="s">
       <default>'Rewrite for clarity and natural flow. Preserve the language, meaning, and tone. Add no ideas or commentary. Return only the improved text.'</default>
     </key>
+    <key name="custom-actions" type="s"><default>'[]'</default></key>
+    <key name="preview-results" type="b"><default>false</default></key>
+    <key name="variable-language" type="s"><default>'English'</default></key>
+    <key name="variable-tone" type="s"><default>'professional'</default></key>
+    <key name="variable-style" type="s"><default>'clear and concise'</default></key>
     <key name="correct-shortcut" type="as"><default>[]</default></key>
     <key name="rewrite-shortcut" type="as"><default>[]</default></key>
+    <key name="actions-shortcut" type="as"><default>[]</default></key>
   </schema>
 </schemalist>

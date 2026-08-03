@@ -2,9 +2,8 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup';
 
-function payload(text, mode) {
-    const action = mode === 'rewrite' ? 'Rewrite' : 'Correct';
-    return `${action} only the text inside the tags.\nReturn only the transformed text. Preserve the original language.\n<text>\n${text}\n</text>`;
+function payload(text) {
+    return `Transform only the text inside the tags.\nReturn only the transformed text.\n<text>\n${text}\n</text>`;
 }
 
 function maxTokens(text) {
@@ -46,12 +45,12 @@ function requestJson(session, url, headers, body, cancellable) {
     });
 }
 
-function openAiBody(model, prompt, text, mode, cerebras = false) {
+function openAiBody(model, prompt, text, cerebras = false) {
     const body = {
         model,
         messages: [
             {role: 'system', content: prompt},
-            {role: 'user', content: payload(text, mode)},
+            {role: 'user', content: payload(text)},
         ],
     };
     body[cerebras ? 'max_completion_tokens' : 'max_tokens'] = maxTokens(text);
@@ -86,22 +85,36 @@ export class AiClient {
         this._settings = null;
     }
 
-    async transform(text, mode) {
+    async transform(text, mode, customPrompt = null) {
         this.cancel();
         this._cancellable = new Gio.Cancellable();
         const provider = this._settings.get_string('provider');
-        const prompt = this._settings.get_string(mode === 'rewrite' ? 'prompt-rewrite' : 'prompt-correct');
+        const storedPrompt = this._settings.get_string(mode === 'rewrite' ? 'prompt-rewrite' : 'prompt-correct');
+        const prompt = this._expandPrompt(customPrompt ?? storedPrompt, text);
+        if (provider === 'ollama')
+            return this._ollama(text, prompt);
         if (provider === 'openai')
-            return this._openAi(text, mode, prompt);
+            return this._openAi(text, prompt);
         if (provider === 'gemini')
-            return this._gemini(text, mode, prompt);
+            return this._gemini(text, prompt);
         if (provider === 'openrouter')
-            return this._openRouter(text, mode, prompt);
+            return this._openRouter(text, prompt);
         if (provider === 'vercel')
-            return this._vercel(text, mode, prompt);
+            return this._vercel(text, prompt);
         if (provider === 'cerebras')
-            return this._cerebras(text, mode, prompt);
-        return this._groq(text, mode, prompt);
+            return this._cerebras(text, prompt);
+        return this._groq(text, prompt);
+    }
+
+    _expandPrompt(prompt, text) {
+        const values = {
+            selection: text,
+            language: this._settings.get_string('variable-language'),
+            tone: this._settings.get_string('variable-tone'),
+            style: this._settings.get_string('variable-style'),
+        };
+        return prompt.replace(/\$\{(selection|language|tone|style)\}/g,
+            (_match, name) => values[name]);
     }
 
     _required(key, label) {
@@ -111,10 +124,10 @@ export class AiClient {
         return value;
     }
 
-    async _groq(text, mode, prompt) {
+    async _groq(text, prompt) {
         const key = this._required('groq-api-key', 'Groq');
         const model = this._settings.get_string('groq-model');
-        const body = openAiBody(model, prompt, text, mode);
+        const body = openAiBody(model, prompt, text);
         if (model.startsWith('openai/gpt-oss-')) {
             body.reasoning_effort = 'low';
             body.include_reasoning = false;
@@ -126,23 +139,40 @@ export class AiClient {
         return outputOrError(result);
     }
 
-    async _openAi(text, mode, prompt) {
+    async _ollama(text, prompt) {
+        const baseUrl = this._settings.get_string('ollama-url').replace(/\/$/, '');
+        const result = await requestJson(this._session,
+            `${baseUrl}/api/chat`, {}, {
+                model: this._settings.get_string('ollama-model'),
+                messages: [
+                    {role: 'system', content: prompt},
+                    {role: 'user', content: payload(text)},
+                ],
+                stream: false,
+            }, this._cancellable);
+        const output = result.data?.message?.content?.trim();
+        if (output)
+            return cleanOutput(output);
+        throw new Error(result.data?.error ?? `Ollama error (${result.status})`);
+    }
+
+    async _openAi(text, prompt) {
         const key = this._required('openai-api-key', 'OpenAI');
         const result = await requestJson(this._session,
             'https://api.openai.com/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('openai-model'), prompt, text, mode), this._cancellable);
+            openAiBody(this._settings.get_string('openai-model'), prompt, text), this._cancellable);
         return outputOrError(result);
     }
 
-    async _gemini(text, mode, prompt) {
+    async _gemini(text, prompt) {
         const key = this._required('gemini-api-key', 'Gemini');
         const model = encodeURIComponent(this._settings.get_string('gemini-model'));
         const result = await requestJson(this._session,
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
             {}, {
                 systemInstruction: {parts: [{text: prompt}]},
-                contents: [{role: 'user', parts: [{text: payload(text, mode)}]}],
+                contents: [{role: 'user', parts: [{text: payload(text)}]}],
                 generationConfig: {maxOutputTokens: maxTokens(text)},
             }, this._cancellable);
         const output = result.data?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim();
@@ -151,30 +181,30 @@ export class AiClient {
         throw new Error(result.data?.error?.message ?? `Gemini error (${result.status})`);
     }
 
-    async _openRouter(text, mode, prompt) {
+    async _openRouter(text, prompt) {
         const key = this._required('openrouter-api-key', 'OpenRouter');
         const result = await requestJson(this._session,
             'https://openrouter.ai/api/v1/chat/completions',
             {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
-            openAiBody(this._settings.get_string('openrouter-model'), prompt, text, mode), this._cancellable);
+            openAiBody(this._settings.get_string('openrouter-model'), prompt, text), this._cancellable);
         return outputOrError(result);
     }
 
-    async _vercel(text, mode, prompt) {
+    async _vercel(text, prompt) {
         const key = this._required('vercel-api-key', 'Vercel AI Gateway');
         const result = await requestJson(this._session,
             'https://ai-gateway.vercel.sh/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('vercel-model'), prompt, text, mode), this._cancellable);
+            openAiBody(this._settings.get_string('vercel-model'), prompt, text), this._cancellable);
         return outputOrError(result);
     }
 
-    async _cerebras(text, mode, prompt) {
+    async _cerebras(text, prompt) {
         const key = this._required('cerebras-api-key', 'Cerebras');
         const result = await requestJson(this._session,
             'https://api.cerebras.ai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('cerebras-model'), prompt, text, mode, true), this._cancellable);
+            openAiBody(this._settings.get_string('cerebras-model'), prompt, text, true), this._cancellable);
         return outputOrError(result);
     }
 }
