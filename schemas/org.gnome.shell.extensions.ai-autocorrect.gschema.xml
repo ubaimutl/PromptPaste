@@ -5,16 +5,16 @@
     <key name="groq-api-key" type="s"><default>''</default></key>
     <key name="groq-model" type="s"><default>'openai/gpt-oss-20b'</default></key>
     <key name="gemini-api-key" type="s"><default>''</default></key>
-    <key name="gemini-model" type="s"><default>'gemini-1.5-flash'</default></key>
+    <key name="gemini-model" type="s"><default>'gemini-3.5-flash-lite'</default></key>
     <key name="openrouter-api-key" type="s"><default>''</default></key>
     <key name="openrouter-model" type="s"><default>'openrouter/free'</default></key>
     <key name="cerebras-api-key" type="s"><default>''</default></key>
     <key name="cerebras-model" type="s"><default>'gpt-oss-120b'</default></key>
     <key name="prompt-correct" type="s">
-      <default>'You are a professional proofreader for German and English. Preserve the original language, meaning, and tone. Correct grammar, spelling, punctuation, clarity, and style. Do not translate, explain, add commentary, or use markdown. Return only the corrected text. If it is already correct, return it unchanged.'</default>
+      <default>'Correct grammar, spelling, punctuation, clarity, and style. Preserve the language, meaning, and tone. Return only the corrected text, unchanged if already correct.'</default>
     </key>
     <key name="prompt-rewrite" type="s">
-      <default>'You are a writing assistant for German and English. Preserve the original language, meaning, and tone. Improve clarity and flow, fix grammar, spelling, and punctuation, and make the text sound natural. Do not add ideas, translate, explain, add commentary, or use markdown. Return only the improved text.'</default>
+      <default>'Rewrite for clarity and natural flow. Preserve the language, meaning, and tone. Add no ideas or commentary. Return only the improved text.'</default>
     </key>
     <key name="correct-shortcut" type="as"><default>[]</default></key>
     <key name="rewrite-shortcut" type="as"><default>[]</default></key>

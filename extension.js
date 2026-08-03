@@ -14,6 +14,8 @@ import {AiClient} from './ai.js';
 
 export default class PromptPasteExtension extends Extension {
     enable() {
+        this._busy = false;
+        this._iconResetId = null;
         this._settings = this.getSettings();
         this._client = new AiClient(this._settings);
         this._clipboard = St.Clipboard.get_default();
@@ -75,17 +77,24 @@ export default class PromptPasteExtension extends Extension {
     async _run(mode) {
         if (this._busy)
             return;
+        const client = this._client;
         this._busy = true;
         this._setIcon('content-loading-symbolic');
         try {
             const text = await this._readSelection();
+            if (this._client !== client)
+                return;
             if (!text.trim())
                 throw new Error('Select text first.');
-            const output = await this._client.transform(text, mode);
+            const output = await client.transform(text, mode);
+            if (this._client !== client)
+                return;
             this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
             this._paste();
             this._setIcon('emblem-ok-symbolic', 1200);
         } catch (error) {
+            if (this._client !== client)
+                return;
             if (error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
             this._setIcon('tools-check-spelling-symbolic');
@@ -96,13 +105,14 @@ export default class PromptPasteExtension extends Extension {
     }
 
     _readSelection() {
+        const clipboard = this._clipboard;
         return new Promise(resolve => {
-            this._clipboard.get_text(St.ClipboardType.PRIMARY, (_clipboard, text) => {
+            clipboard.get_text(St.ClipboardType.PRIMARY, (_clipboard, text) => {
                 if (text?.trim()) {
                     resolve(text);
                     return;
                 }
-                this._clipboard.get_text(St.ClipboardType.CLIPBOARD,
+                clipboard.get_text(St.ClipboardType.CLIPBOARD,
                     (_secondClipboard, fallback) => resolve(fallback ?? ''));
             });
         });

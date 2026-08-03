@@ -132,7 +132,7 @@ export class AiClient {
             {}, {
                 systemInstruction: {parts: [{text: prompt}]},
                 contents: [{role: 'user', parts: [{text: payload(text, mode)}]}],
-                generationConfig: {maxOutputTokens: maxTokens(text), temperature: 0, topP: 1},
+                generationConfig: {maxOutputTokens: maxTokens(text)},
             }, this._cancellable);
         const output = result.data?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim();
         if (output)
