@@ -1,0 +1,16 @@
+.promptpaste-feedback {
+  max-width: 360px;
+  padding: 8px 12px;
+  border-radius: 9px;
+  color: white;
+  background-color: rgba(32, 32, 32, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.promptpaste-feedback.error {
+  background-color: rgba(145, 28, 28, 0.96);
+}
+
+.promptpaste-result {
+  padding: 8px;
+}

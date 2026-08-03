@@ -23,7 +23,9 @@
       <default>'Rewrite for clarity and natural flow. Preserve the language, meaning, and tone. Add no ideas or commentary. Return only the improved text.'</default>
     </key>
     <key name="custom-actions" type="s"><default>'[]'</default></key>
+    <key name="model-cache" type="s"><default>'{}'</default></key>
     <key name="preview-results" type="b"><default>false</default></key>
+    <key name="pointer-feedback" type="b"><default>true</default></key>
     <key name="variable-language" type="s"><default>'English'</default></key>
     <key name="variable-tone" type="s"><default>'professional'</default></key>
     <key name="variable-style" type="s"><default>'clear and concise'</default></key>
