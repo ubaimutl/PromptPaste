@@ -8,6 +8,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import * as Config from 'resource:///org/gnome/shell/misc/config.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
@@ -15,6 +16,8 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 import {AiClient} from './ai.js';
 import {readActions} from './actions.js';
+
+const SHELL_MAJOR = Number.parseInt(Config.PACKAGE_VERSION, 10);
 
 const ResultDialog = GObject.registerClass(
 class ResultDialog extends ModalDialog.ModalDialog {
@@ -37,10 +40,9 @@ class ResultDialog extends ModalDialog.ModalDialog {
             height: Math.min(320, Math.max(120, estimatedLines * 24 + 24)),
             style_class: 'vfade',
         });
-        const box = new St.BoxLayout({
-            orientation: Clutter.Orientation.VERTICAL,
-            x_expand: true,
-        });
+        const box = new St.BoxLayout(SHELL_MAJOR >= 48
+            ? {orientation: Clutter.Orientation.VERTICAL, x_expand: true}
+            : {vertical: true, x_expand: true});
         const label = new St.Label({
             text: result,
             x_align: Clutter.ActorAlign.START,
@@ -362,30 +364,24 @@ export default class PromptPasteExtension extends Extension {
         if (!await this._delay(25))
             return '';
 
-        const selection = global.display.get_selection();
-        let ownerChanged = false;
-        const ownerChangedId = selection.connect('owner-changed', (_selection, type) => {
-            if (type === Meta.SelectionType.CLIPBOARD)
-                ownerChanged = true;
-        });
+        this._clipboard.set_text(St.ClipboardType.CLIPBOARD, '');
+        if (!await this._delay(25))
+            return '';
+        this._copy();
 
-        try {
-            this._copy();
-
-            for (const delay of [60, 100, 180, 300]) {
-                if (!await this._delay(delay))
-                    return '';
-                const text = await this._getClipboardText(St.ClipboardType.CLIPBOARD);
-                if (text?.trim() && (ownerChanged || text !== previous))
-                    return text;
-            }
-
-            if (this._settings?.get_boolean('clipboard-fallback') && previous?.trim())
-                return previous;
-            throw new Error('Could not capture selected text. Select it and try again.');
-        } finally {
-            selection.disconnect(ownerChangedId);
+        for (const delay of [60, 100, 180, 300]) {
+            if (!await this._delay(delay))
+                return '';
+            const text = await this._getClipboardText(St.ClipboardType.CLIPBOARD);
+            if (text?.trim())
+                return text;
         }
+
+        if (previous)
+            this._clipboard.set_text(St.ClipboardType.CLIPBOARD, previous);
+        if (this._settings?.get_boolean('clipboard-fallback') && previous?.trim())
+            return previous;
+        throw new Error('Could not capture selected text. Select it and try again.');
     }
 
     _getClipboardText(type) {
