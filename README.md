@@ -18,6 +18,19 @@ Clipboard text is sent to your chosen provider only when you run an action.
 
 Create your own actions, reuse `${language}`, `${tone}`, `${style}`, or `${selection}` in prompts, and optionally preview results before replacing text.
 
-Settings show only the active provider. Refresh its searchable model list or enter a custom model ID. Optional pointer feedback shows progress and results beside the cursor.
-
 [Install from GNOME Extensions](https://extensions.gnome.org/extension/10540/ai-autocorrect/)
+
+## What to know
+
+Groq, Gemini, Cerebras, and selected OpenRouter models offer free access with usage limits. Free models and limits may change:
+
+- **Groq:** Free plan with model-specific limits. Groq says inference data is not retained by default or used for training without permission.
+- **Gemini:** Has a free tier. Outside the EEA, Switzerland, and UK, free-tier inputs and outputs may be used to improve Google products and may be reviewed by humans. Do not send sensitive information. This does not apply to users in those regions under the current terms.
+- **OpenRouter:** Only models marked as free are free. Data handling depends on the selected model provider; enable Zero Data Retention in OpenRouter's privacy settings when available.
+- **Cerebras:** Free tier with model-specific limits.
+- **Ollama:** Runs locally and does not send text to an online provider when using a local Ollama server.
+- **OpenAI and Vercel AI Gateway:** Usage may be charged by the provider. PromptPaste itself does not charge anything.
+
+Your selected text is sent only when you run an action. API keys are stored locally in GNOME settings, but they are not stored in an encrypted password vault. Do not share your keys, and revoke any key that may have been exposed.
+
+AI responses can be incorrect. Enable result preview if you want to review generated text before replacing the selection.
