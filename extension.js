@@ -87,10 +87,10 @@ export default class PromptPasteExtension extends Extension {
     enable() {
         this._busy = false;
         this._iconResetId = null;
-        this._pasteId = null;
         this._feedbackId = null;
         this._feedback = null;
         this._previewDialog = null;
+        this._pendingDelays = new Map();
         this._settings = this.getSettings();
         this._client = new AiClient(this._settings);
         this._clipboard = St.Clipboard.get_default();
@@ -146,11 +146,6 @@ export default class PromptPasteExtension extends Extension {
             this._previewDialog = null;
         }
 
-        if (this._pasteId) {
-            GLib.Source.remove(this._pasteId);
-            this._pasteId = null;
-        }
-
         if (this._feedbackId) {
             GLib.Source.remove(this._feedbackId);
             this._feedbackId = null;
@@ -165,11 +160,19 @@ export default class PromptPasteExtension extends Extension {
             this._iconResetId = null;
         }
 
+        for (const [id, resolve] of this._pendingDelays) {
+            GLib.Source.remove(id);
+            resolve(false);
+        }
+        this._pendingDelays.clear();
+        this._pendingDelays = null;
+
+        this._actionsSection.destroy();
+        this._actionsSection = null;
         this._icon.destroy();
         this._icon = null;
         this._indicator.destroy();
         this._indicator = null;
-        this._actionsSection = null;
         this._keyboard = null;
         this._clipboard = null;
         this._settings = null;
@@ -194,11 +197,12 @@ export default class PromptPasteExtension extends Extension {
         if (this._busy)
             return;
         const client = this._client;
+        const focusedWindow = global.display.focus_window;
         this._busy = true;
         this._setIcon('content-loading-symbolic');
         this._showFeedback('Working…', false, 0);
         try {
-            const text = await this._readSelection();
+            const text = await this._readSelection(focusedWindow);
             if (this._client !== client)
                 return;
             if (!text.trim())
@@ -245,23 +249,25 @@ export default class PromptPasteExtension extends Extension {
 
     _replace(output, delayed, message) {
         this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
-        if (!delayed) {
-            this._paste();
-            this._setIcon('emblem-ok-symbolic', 1200);
-            this._showFeedback(message);
+        this._pasteWhenReady(delayed ? 200 : 0, message);
+    }
+
+    async _pasteWhenReady(initialDelay, message) {
+        if (initialDelay > 0 && !await this._delay(initialDelay))
+            return;
+        const released = await this._waitForModifiersReleased();
+        if (!this._keyboard)
+            return;
+        if (!released) {
+            this._setIcon('tools-check-spelling-symbolic');
+            this._showFeedback('Release the shortcut keys and try again.', true, 3500);
             return;
         }
-        if (this._pasteId)
-            GLib.Source.remove(this._pasteId);
-        this._pasteId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-            this._pasteId = null;
-            if (this._keyboard) {
-                this._paste();
-                this._setIcon('emblem-ok-symbolic', 1200);
-                this._showFeedback(message);
-            }
-            return GLib.SOURCE_REMOVE;
-        });
+        if (!await this._delay(25) || !this._keyboard)
+            return;
+        this._paste();
+        this._setIcon('emblem-ok-symbolic', 1200);
+        this._showFeedback(message);
     }
 
     _showFeedback(message, error = false, duration = 1500) {
@@ -313,18 +319,134 @@ export default class PromptPasteExtension extends Extension {
         }
     }
 
-    _readSelection() {
+    async _readSelection(focusedWindow) {
+        if (this._usesExplicitCopy(focusedWindow))
+            return this._readExplicitCopy();
+
+        const text = await this._getClipboardText(St.ClipboardType.PRIMARY);
+        if (text?.trim())
+            return text;
+        if (!this._settings?.get_boolean('clipboard-fallback'))
+            return '';
+        return this._getClipboardText(St.ClipboardType.CLIPBOARD);
+    }
+
+    _usesExplicitCopy(window) {
+        if (!window || !this._settings)
+            return false;
+        const allowed = this._settings.get_string('explicit-copy-apps')
+            .split(/[\n,]/)
+            .map(value => value.trim().toLowerCase())
+            .filter(Boolean);
+        if (allowed.length === 0)
+            return false;
+
+        const appId = Shell.WindowTracker.get_default()
+            .get_window_app(window)?.get_id();
+        const values = [
+            appId,
+            window.get_wm_class(),
+            window.get_wm_class_instance(),
+            window.get_gtk_application_id(),
+        ].filter(Boolean).map(value => value.toLowerCase());
+        return allowed.some(name => values.some(value => value.includes(name)));
+    }
+
+    async _readExplicitCopy() {
+        const previous = await this._getClipboardText(St.ClipboardType.CLIPBOARD);
+        const released = await this._waitForModifiersReleased();
+        if (!this._keyboard)
+            return '';
+        if (!released)
+            throw new Error('Release the shortcut keys and try again.');
+        if (!await this._delay(25))
+            return '';
+
+        const selection = global.display.get_selection();
+        let ownerChanged = false;
+        const ownerChangedId = selection.connect('owner-changed', (_selection, type) => {
+            if (type === Meta.SelectionType.CLIPBOARD)
+                ownerChanged = true;
+        });
+
+        try {
+            this._copy();
+
+            for (const delay of [60, 100, 180, 300]) {
+                if (!await this._delay(delay))
+                    return '';
+                const text = await this._getClipboardText(St.ClipboardType.CLIPBOARD);
+                if (text?.trim() && (ownerChanged || text !== previous))
+                    return text;
+            }
+
+            if (this._settings?.get_boolean('clipboard-fallback') && previous?.trim())
+                return previous;
+            throw new Error('Could not capture selected text. Select it and try again.');
+        } finally {
+            selection.disconnect(ownerChangedId);
+        }
+    }
+
+    _getClipboardText(type) {
         const clipboard = this._clipboard;
         return new Promise(resolve => {
-            clipboard.get_text(St.ClipboardType.PRIMARY, (_clipboard, text) => {
-                if (text?.trim()) {
-                    resolve(text);
-                    return;
-                }
-                clipboard.get_text(St.ClipboardType.CLIPBOARD,
-                    (_secondClipboard, fallback) => resolve(fallback ?? ''));
-            });
+            if (!clipboard) {
+                resolve('');
+                return;
+            }
+            clipboard.get_text(type, (_clipboard, text) => resolve(text ?? ''));
         });
+    }
+
+    _delay(milliseconds) {
+        return new Promise(resolve => {
+            if (!this._pendingDelays) {
+                resolve(false);
+                return;
+            }
+            const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, milliseconds, () => {
+                this._pendingDelays?.delete(id);
+                resolve(Boolean(this._keyboard));
+                return GLib.SOURCE_REMOVE;
+            });
+            this._pendingDelays.set(id, resolve);
+        });
+    }
+
+    async _waitForModifiersReleased(timeoutMs = 1500) {
+        const modifierMask = [
+            Clutter.ModifierType.SHIFT_MASK,
+            Clutter.ModifierType.CONTROL_MASK,
+            Clutter.ModifierType.MOD1_MASK,
+            Clutter.ModifierType.MOD3_MASK,
+            Clutter.ModifierType.MOD4_MASK,
+            Clutter.ModifierType.MOD5_MASK,
+            Clutter.ModifierType.SUPER_MASK,
+            Clutter.ModifierType.HYPER_MASK,
+            Clutter.ModifierType.META_MASK,
+        ].reduce((mask, value) => mask | (value ?? 0), 0);
+        const startedAt = GLib.get_monotonic_time();
+
+        while (this._keyboard) {
+            const [, , modifiers] = global.get_pointer();
+            if ((modifiers & modifierMask) === 0)
+                return true;
+            const elapsedMs = (GLib.get_monotonic_time() - startedAt) / 1000;
+            if (elapsedMs >= timeoutMs)
+                return false;
+            if (!await this._delay(20))
+                return false;
+        }
+        return false;
+    }
+
+    _copy() {
+        const time = GLib.get_monotonic_time();
+        this._keyboard.notify_keyval(time, Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_c, Clutter.KeyState.PRESSED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_c, Clutter.KeyState.RELEASED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
     }
 
     _paste() {

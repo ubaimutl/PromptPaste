@@ -57,6 +57,18 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         this._shortcutRow(shortcuts, settings, 'actions-shortcut', 'Open actions');
         page.add(shortcuts);
 
+        const capture = new Adw.PreferencesGroup({
+            title: 'Selection capture',
+            description:
+                'GNOME normally reads the PRIMARY selection. Some apps—especially ' +
+                'Firefox on Wayland—do not update it reliably. For listed apps, ' +
+                'PromptPaste sends Ctrl+C and reads the regular clipboard instead. ' +
+                'This changes the clipboard. Avoid adding terminals unless Ctrl+C ' +
+                'copies text there.',
+        });
+        entry(capture, settings, 'explicit-copy-apps', 'Compatibility apps');
+        page.add(capture);
+
         const behavior = new Adw.PreferencesGroup({title: 'Result'});
         const preview = new Adw.SwitchRow({
             title: 'Preview before replacing',
@@ -64,6 +76,12 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         });
         settings.bind('preview-results', preview, 'active', Gio.SettingsBindFlags.DEFAULT);
         behavior.add(preview);
+        const clipboardFallback = new Adw.SwitchRow({
+            title: 'Use clipboard when no text is selected',
+            subtitle: 'Allow actions to use previously copied text.',
+        });
+        settings.bind('clipboard-fallback', clipboardFallback, 'active', Gio.SettingsBindFlags.DEFAULT);
+        behavior.add(clipboardFallback);
         const pointerFeedback = new Adw.SwitchRow({
             title: 'Show feedback near pointer',
             subtitle: 'Show progress, success, and errors where you are working.',
@@ -86,6 +104,14 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         entry(variables, settings, 'variable-style', 'Style');
         page.add(variables);
 
+        window.connect('close-request', () => {
+            this._providerSettings = null;
+            this._providerRows = null;
+            this._modelRow = null;
+            this._actionsGroup = null;
+            this._actionRows = null;
+            return false;
+        });
         window.add(page);
     }
 
@@ -202,6 +228,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const dialog = new Adw.Window({
             title: 'Custom model',
             modal: true,
+            destroy_with_parent: true,
             transient_for: this._providerSettings.get_root(),
             default_width: 480,
             default_height: 160,
@@ -285,6 +312,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const dialog = new Adw.Window({
             title: action ? 'Edit action' : 'New action',
             modal: true,
+            destroy_with_parent: true,
             transient_for: this._actionsGroup.get_root(),
             default_width: 520,
             default_height: 260,
@@ -326,6 +354,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             });
             const dialog = new Adw.Window({
                 modal: true,
+                destroy_with_parent: true,
                 transient_for: row.get_root(),
                 default_width: 480,
                 default_height: 300,

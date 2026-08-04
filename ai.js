@@ -7,7 +7,7 @@ function payload(text) {
 }
 
 function maxTokens(text) {
-    return Math.min(900, Math.max(220, Math.ceil(text.length / 4) + 180));
+    return Math.min(2000, Math.max(220, Math.ceil(text.length / 4) + 180));
 }
 
 function cleanOutput(text) {

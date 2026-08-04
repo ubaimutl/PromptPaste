@@ -18,7 +18,7 @@ Clipboard text is sent to your chosen provider only when you run an action.
 
 Create your own actions, reuse `${language}`, `${tone}`, `${style}`, or `${selection}` in prompts, and optionally preview results before replacing text.
 
-[Install from GNOME Extensions](https://extensions.gnome.org/extension/10540/ai-autocorrect/)
+GNOME Extensions publication pending.
 
 ## What to know
 
@@ -31,6 +31,8 @@ Groq, Gemini, Cerebras, and selected OpenRouter models offer free access with us
 - **Ollama:** Runs locally and does not send text to an online provider when using a local Ollama server.
 - **OpenAI and Vercel AI Gateway:** Usage may be charged by the provider. PromptPaste itself does not charge anything.
 
-Your selected text is sent only when you run an action. API keys are stored locally in GNOME settings, but they are not stored in an encrypted password vault. Do not share your keys, and revoke any key that may have been exposed.
+Your selected text is sent only when you run an action. Using previously copied clipboard text is optional and disabled by default. API keys are stored locally in GNOME settings, but they are not stored in an encrypted password vault. Do not share your keys, and revoke any key that may have been exposed.
+
+Firefox uses explicit-copy compatibility by default because its Wayland selection can be unreliable. This mode sends Ctrl+C and changes the regular clipboard. Other application IDs can be added in Settings.
 
 AI responses can be incorrect. Enable result preview if you want to review generated text before replacing the selection.
