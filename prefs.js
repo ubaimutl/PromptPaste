@@ -6,7 +6,7 @@ import Gtk from 'gi://Gtk';
 
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import {readActions, writeActions} from './actions.js';
-import {fetchModels, PROVIDERS} from './models.js';
+import {abortModelRequests, fetchModels, PROVIDERS} from './models.js';
 
 function entry(group, settings, key, title, password = false) {
     const row = password ? new Adw.PasswordEntryRow({title}) : new Adw.EntryRow({title});
@@ -105,6 +105,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         page.add(variables);
 
         window.connect('close-request', () => {
+            abortModelRequests();
             this._providerSettings = null;
             this._providerRows = null;
             this._modelRow = null;
@@ -116,6 +117,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
     }
 
     _renderProviderSettings(settings) {
+        abortModelRequests();
         for (const row of this._providerRows)
             this._providerSettings.remove(row);
         this._providerRows = [];

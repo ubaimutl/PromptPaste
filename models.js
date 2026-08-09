@@ -11,10 +11,19 @@ export const PROVIDERS = [
     {id: 'vercel', name: 'Vercel AI Gateway', key: 'vercel-api-key'},
 ];
 
+const activeSessions = new Set();
+
+export function abortModelRequests() {
+    for (const session of activeSessions)
+        session.abort();
+    activeSessions.clear();
+}
+
 function getJson(url, headers = {}) {
     return new Promise((resolve, reject) => {
         const session = new Soup.Session({timeout: 20});
         const message = Soup.Message.new('GET', url);
+        activeSessions.add(session);
         for (const [name, value] of Object.entries(headers))
             message.request_headers.append(name, value);
         session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (_session, result) => {
@@ -28,6 +37,7 @@ function getJson(url, headers = {}) {
             } catch (error) {
                 reject(error);
             } finally {
+                activeSessions.delete(session);
                 session.abort();
             }
         });
