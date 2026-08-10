@@ -90,6 +90,7 @@ export default class PromptPasteExtension extends Extension {
         this._busy = false;
         this._iconResetId = null;
         this._feedbackId = null;
+        this._feedbackFollowId = null;
         this._feedback = null;
         this._previewDialog = null;
         this._pendingDelays = new Map();
@@ -148,6 +149,10 @@ export default class PromptPasteExtension extends Extension {
             this._previewDialog = null;
         }
 
+        if (this._feedbackFollowId) {
+            GLib.Source.remove(this._feedbackFollowId);
+            this._feedbackFollowId = null;
+        }
         if (this._feedbackId) {
             GLib.Source.remove(this._feedbackId);
             this._feedbackId = null;
@@ -282,6 +287,10 @@ export default class PromptPasteExtension extends Extension {
             GLib.Source.remove(this._feedbackId);
             this._feedbackId = null;
         }
+        if (this._feedbackFollowId) {
+            GLib.Source.remove(this._feedbackFollowId);
+            this._feedbackFollowId = null;
+        }
         if (this._feedback) {
             this._feedback.destroy();
             this._feedback = null;
@@ -294,18 +303,33 @@ export default class PromptPasteExtension extends Extension {
         });
         label.clutter_text.line_wrap = true;
         Main.uiGroup.add_child(label);
-        const [pointerX, pointerY] = global.get_pointer();
         const [, naturalWidth] = label.get_preferred_width(-1);
         const [, naturalHeight] = label.get_preferred_height(naturalWidth);
-        const x = Math.max(8, Math.min(pointerX + 16, global.stage.width - naturalWidth - 8));
-        const y = Math.max(8, Math.min(pointerY + 20, global.stage.height - naturalHeight - 8));
-        label.set_position(x, y);
+
+        const position = () => {
+            const [pointerX, pointerY] = global.get_pointer();
+            const x = Math.max(8, Math.min(pointerX + 16, global.stage.width - naturalWidth - 8));
+            const y = Math.max(8, Math.min(pointerY + 20, global.stage.height - naturalHeight - 8));
+            label.set_position(x, y);
+        };
+        position();
         label.ease({opacity: 255, duration: 100, mode: Clutter.AnimationMode.EASE_OUT_QUAD});
         this._feedback = label;
+
+        this._feedbackFollowId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
+            if (!this._feedback)
+                return GLib.SOURCE_REMOVE;
+            position();
+            return GLib.SOURCE_CONTINUE;
+        });
 
         if (duration > 0) {
             this._feedbackId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, duration, () => {
                 this._feedbackId = null;
+                if (this._feedbackFollowId) {
+                    GLib.Source.remove(this._feedbackFollowId);
+                    this._feedbackFollowId = null;
+                }
                 label.ease({
                     opacity: 0,
                     duration: 150,
