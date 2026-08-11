@@ -1,0 +1,15 @@
+# Packaged extension
+*.zip
+
+# Generated GSettings schema
+schemas/gschemas.compiled
+
+# Logs / temporary files
+*.log
+*~
+*.swp
+*.swo
+
+# IDE-local files
+.vscode/
+
