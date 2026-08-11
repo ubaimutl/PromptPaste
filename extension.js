@@ -96,10 +96,28 @@ class ActionPalette extends ModalDialog.ModalDialog {
         this._onActivate = onActivate;
         this._onClose = onClose;
 
-        this.contentLayout.add_child(new St.Label({
+        const header = new St.BoxLayout({
+            style_class: 'promptpaste-palette-header',
+            x_expand: true,
+        });
+        header.add_child(new St.Label({
             text: 'PromptPaste',
             style_class: 'promptpaste-palette-title',
+            x_align: Clutter.ActorAlign.CENTER,
+            y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
         }));
+        const closeButton = new St.Button({
+            style_class: 'icon-button flat promptpaste-palette-close',
+            child: new St.Icon({icon_name: 'window-close-symbolic'}),
+            accessible_name: 'Close action palette',
+            can_focus: true,
+            reactive: true,
+            track_hover: true,
+        });
+        closeButton.connect('clicked', () => this._finish());
+        header.add_child(closeButton);
+        this.contentLayout.add_child(header);
         const list = new St.BoxLayout(SHELL_MAJOR >= 48
             ? {orientation: Clutter.Orientation.VERTICAL, style_class: 'promptpaste-palette-list'}
             : {vertical: true, style_class: 'promptpaste-palette-list'});

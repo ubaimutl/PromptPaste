@@ -15,11 +15,19 @@
   padding: 8px;
 }
 
+.promptpaste-palette-header {
+  margin-bottom: 10px;
+  spacing: 8px;
+}
+
 .promptpaste-palette-title {
   font-size: 1.15em;
   font-weight: 700;
-  margin-bottom: 10px;
   text-align: center;
+}
+
+.promptpaste-palette-close StIcon {
+  icon-size: 16px;
 }
 
 .promptpaste-palette-list {
