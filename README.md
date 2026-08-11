@@ -18,6 +18,8 @@ Clipboard text is sent to your chosen provider only when you run an action.
 
 Create your own actions, reuse `${language}`, `${tone}`, `${style}`, or `${selection}` in prompts, and optionally preview results before replacing text. Custom actions can use the active provider or override the provider and model, can be reordered, and can be hidden without being deleted.
 
+Custom actions can also set optional input and output token limits. Input limits use a lightweight estimate and stop the action before sending when selected text is too long; PromptPaste never truncates the selection. Output limits are passed to the selected provider, while Auto keeps the existing response-length behavior. If a provider reports that its response reached the output limit, PromptPaste rejects the partial result and asks you to increase the limit.
+
 ## Installation
 
 Install PromptPaste from [GNOME Shell Extensions](https://extensions.gnome.org/extension/10540/ai-autocorrect/). It supports GNOME Shell 46 through 50.

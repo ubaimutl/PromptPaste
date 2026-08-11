@@ -332,7 +332,12 @@ export default class PromptPasteExtension extends Extension {
             const item = new PopupMenu.PopupMenuItem(action.name);
             item.connect('activate', () => this._run(
                 'custom', action.prompt, action.name,
-                {provider: action.provider, model: action.model}));
+                {
+                    provider: action.provider,
+                    model: action.model,
+                    inputLimit: action.inputLimit,
+                    outputLimit: action.outputLimit,
+                }));
             this._actionsSection.addMenuItem(item);
         }
     }
@@ -357,6 +362,8 @@ export default class PromptPasteExtension extends Extension {
                     prompt: action.prompt,
                     provider: action.provider,
                     model: action.model,
+                    inputLimit: action.inputLimit,
+                    outputLimit: action.outputLimit,
                     icon: 'system-run-symbolic',
                 })),
         ];
@@ -366,7 +373,12 @@ export default class PromptPasteExtension extends Extension {
                 action => this._run(
                     action.mode, action.prompt,
                     action.mode === 'custom' ? action.name : null,
-                    {provider: action.provider ?? '', model: action.model ?? ''}),
+                    {
+                        provider: action.provider ?? '',
+                        model: action.model ?? '',
+                        inputLimit: action.inputLimit ?? 0,
+                        outputLimit: action.outputLimit ?? 0,
+                    }),
                 () => {
                     if (this._actionPalette === palette)
                         this._actionPalette = null;
@@ -402,7 +414,12 @@ export default class PromptPasteExtension extends Extension {
         for (const action of customActions) {
             addAction(action.name, () => this._run(
                 'custom', action.prompt, action.name,
-                {provider: action.provider, model: action.model}));
+                {
+                    provider: action.provider,
+                    model: action.model,
+                    inputLimit: action.inputLimit,
+                    outputLimit: action.outputLimit,
+                }));
         }
 
         this._actionPalette = palette;

@@ -14,6 +14,12 @@ export function readActions(settings) {
             enabled: action.enabled !== false,
             provider: typeof action.provider === 'string' ? action.provider : '',
             model: typeof action.model === 'string' ? action.model : '',
+            inputLimit: Number.isSafeInteger(action.inputLimit) && action.inputLimit > 0
+                ? action.inputLimit
+                : 0,
+            outputLimit: Number.isSafeInteger(action.outputLimit) && action.outputLimit > 0
+                ? action.outputLimit
+                : 0,
         }));
 }
 

@@ -18,8 +18,17 @@ function payload(text) {
     return `Transform only the text inside the tags.\nReturn only the transformed text.\n<text>\n${text}\n</text>`;
 }
 
-function maxTokens(text) {
-    return Math.min(2000, Math.max(220, Math.ceil(text.length / 4) + 180));
+function tokenLimit(value) {
+    return Number.isSafeInteger(value) && value > 0 ? value : 0;
+}
+
+function estimateTokens(text) {
+    return Math.ceil(text.length / 4);
+}
+
+function maxTokens(text, outputLimit = 0) {
+    return tokenLimit(outputLimit) ||
+        Math.min(2000, Math.max(220, estimateTokens(text) + 180));
 }
 
 function cleanOutput(text) {
@@ -58,7 +67,7 @@ function requestJson(session, url, headers, body, cancellable) {
     });
 }
 
-function openAiBody(model, prompt, text, cerebras = false) {
+function openAiBody(model, prompt, text, outputLimit = 0, cerebras = false) {
     const body = {
         model,
         messages: [
@@ -66,7 +75,7 @@ function openAiBody(model, prompt, text, cerebras = false) {
             {role: 'user', content: payload(text)},
         ],
     };
-    body[cerebras ? 'max_completion_tokens' : 'max_tokens'] = maxTokens(text);
+    body[cerebras ? 'max_completion_tokens' : 'max_tokens'] = maxTokens(text, outputLimit);
     return body;
 }
 
@@ -105,7 +114,14 @@ function networkError(error) {
     return error;
 }
 
+function outputLimitError() {
+    return new Error(
+        'Response reached the output limit. Increase the output limit or select less text and try again.');
+}
+
 function outputOrError(result, provider, model) {
+    if (result.data?.choices?.[0]?.finish_reason === 'length')
+        throw outputLimitError();
     const output = result.data?.choices?.[0]?.message?.content?.trim();
     if (output)
         return cleanOutput(output);
@@ -135,6 +151,14 @@ export class AiClient {
 
     async transform(text, mode, customPrompt = null, options = {}) {
         this.cancel();
+        const inputLimit = mode === 'custom' ? tokenLimit(options.inputLimit) : 0;
+        const estimatedTokens = estimateTokens(text);
+        if (inputLimit && estimatedTokens > inputLimit) {
+            throw new Error(
+                `Selected text is about ${estimatedTokens} tokens, above this action's ` +
+                `${inputLimit}-token input limit. Select less text or raise the limit.`);
+        }
+        const outputLimit = mode === 'custom' ? tokenLimit(options.outputLimit) : 0;
         this._cancellable = new Gio.Cancellable();
         const selectedProvider = options.provider || this._settings.get_string('provider');
         const provider = PROVIDER_NAMES[selectedProvider] ? selectedProvider : 'groq';
@@ -143,18 +167,18 @@ export class AiClient {
         const prompt = this._expandPrompt(customPrompt ?? storedPrompt, text);
         try {
             if (provider === 'ollama')
-                return await this._ollama(text, prompt, model);
+                return await this._ollama(text, prompt, model, outputLimit);
             if (provider === 'openai')
-                return await this._openAi(text, prompt, model);
+                return await this._openAi(text, prompt, model, outputLimit);
             if (provider === 'gemini')
-                return await this._gemini(text, prompt, model);
+                return await this._gemini(text, prompt, model, outputLimit);
             if (provider === 'openrouter')
-                return await this._openRouter(text, prompt, model);
+                return await this._openRouter(text, prompt, model, outputLimit);
             if (provider === 'vercel')
-                return await this._vercel(text, prompt, model);
+                return await this._vercel(text, prompt, model, outputLimit);
             if (provider === 'cerebras')
-                return await this._cerebras(text, prompt, model);
-            return await this._groq(text, prompt, model);
+                return await this._cerebras(text, prompt, model, outputLimit);
+            return await this._groq(text, prompt, model, outputLimit);
         } catch (error) {
             throw networkError(error);
         }
@@ -178,9 +202,9 @@ export class AiClient {
         return value;
     }
 
-    async _groq(text, prompt, model) {
+    async _groq(text, prompt, model, outputLimit) {
         const key = await this._required('groq');
-        const body = openAiBody(model, prompt, text);
+        const body = openAiBody(model, prompt, text, outputLimit);
         if (model.startsWith('openai/gpt-oss-')) {
             body.reasoning_effort = 'low';
             body.include_reasoning = false;
@@ -192,33 +216,38 @@ export class AiClient {
         return outputOrError(result, 'groq', model);
     }
 
-    async _ollama(text, prompt, model) {
+    async _ollama(text, prompt, model, outputLimit) {
         const baseUrl = this._settings.get_string('ollama-url').replace(/\/$/, '');
+        const body = {
+            model,
+            messages: [
+                {role: 'system', content: prompt},
+                {role: 'user', content: payload(text)},
+            ],
+            stream: false,
+        };
+        if (outputLimit)
+            body.options = {num_predict: outputLimit};
         const result = await requestJson(this._session,
-            `${baseUrl}/api/chat`, {}, {
-                model,
-                messages: [
-                    {role: 'system', content: prompt},
-                    {role: 'user', content: payload(text)},
-                ],
-                stream: false,
-            }, this._cancellable);
+            `${baseUrl}/api/chat`, {}, body, this._cancellable);
+        if (result.data?.done_reason === 'length')
+            throw outputLimitError();
         const output = result.data?.message?.content?.trim();
         if (output)
             return cleanOutput(output);
         throw providerError(result, 'ollama', model);
     }
 
-    async _openAi(text, prompt, model) {
+    async _openAi(text, prompt, model, outputLimit) {
         const key = await this._required('openai');
         const result = await requestJson(this._session,
             'https://api.openai.com/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text), this._cancellable);
+            openAiBody(model, prompt, text, outputLimit), this._cancellable);
         return outputOrError(result, 'openai', model);
     }
 
-    async _gemini(text, prompt, model) {
+    async _gemini(text, prompt, model, outputLimit) {
         const key = await this._required('gemini');
         const encodedModel = encodeURIComponent(model);
         const result = await requestJson(this._session,
@@ -226,38 +255,40 @@ export class AiClient {
             {}, {
                 systemInstruction: {parts: [{text: prompt}]},
                 contents: [{role: 'user', parts: [{text: payload(text)}]}],
-                generationConfig: {maxOutputTokens: maxTokens(text)},
+                generationConfig: {maxOutputTokens: maxTokens(text, outputLimit)},
             }, this._cancellable);
+        if (result.data?.candidates?.[0]?.finishReason === 'MAX_TOKENS')
+            throw outputLimitError();
         const output = result.data?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim();
         if (output)
             return cleanOutput(output);
         throw providerError(result, 'gemini', model);
     }
 
-    async _openRouter(text, prompt, model) {
+    async _openRouter(text, prompt, model, outputLimit) {
         const key = await this._required('openrouter');
         const result = await requestJson(this._session,
             'https://openrouter.ai/api/v1/chat/completions',
             {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
-            openAiBody(model, prompt, text), this._cancellable);
+            openAiBody(model, prompt, text, outputLimit), this._cancellable);
         return outputOrError(result, 'openrouter', model);
     }
 
-    async _vercel(text, prompt, model) {
+    async _vercel(text, prompt, model, outputLimit) {
         const key = await this._required('vercel');
         const result = await requestJson(this._session,
             'https://ai-gateway.vercel.sh/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text), this._cancellable);
+            openAiBody(model, prompt, text, outputLimit), this._cancellable);
         return outputOrError(result, 'vercel', model);
     }
 
-    async _cerebras(text, prompt, model) {
+    async _cerebras(text, prompt, model, outputLimit) {
         const key = await this._required('cerebras');
         const result = await requestJson(this._session,
             'https://api.cerebras.ai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text, true), this._cancellable);
+            openAiBody(model, prompt, text, outputLimit, true), this._cancellable);
         return outputOrError(result, 'cerebras', model);
     }
 }

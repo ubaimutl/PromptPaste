@@ -9,11 +9,71 @@ import {readActions, writeActions} from './actions.js';
 import {abortModelRequests, fetchModels, PROVIDERS} from './models.js';
 import {getApiKey, setApiKey} from './secrets.js';
 
+const INPUT_LIMIT_VALUES = [0, 2000, 4000, 8000, 16000, 32000];
+const INPUT_LIMIT_LABELS = ['Auto', '2K', '4K', '8K', '16K', '32K', 'Custom'];
+const OUTPUT_LIMIT_VALUES = [0, 1000, 2000, 4000, 8000, 16000];
+const OUTPUT_LIMIT_LABELS = ['Auto', '1K', '2K', '4K', '8K', '16K', 'Custom'];
+
 function entry(group, settings, key, title) {
     const row = new Adw.EntryRow({title});
     settings.bind(key, row, 'text', Gio.SettingsBindFlags.DEFAULT);
     group.add(row);
     return row;
+}
+
+function formatTokenLimit(value) {
+    if (!value)
+        return 'Auto';
+    return value % 1000 === 0 ? `${value / 1000}K` : String(value);
+}
+
+function promptPreview(prompt, maximum = 140) {
+    const compact = prompt.replace(/\s+/g, ' ').trim();
+    const characters = Array.from(compact);
+    if (characters.length <= maximum)
+        return compact;
+    return `${characters.slice(0, maximum).join('').trimEnd()}…`;
+}
+
+function tokenLimitControl(title, subtitle, values, labels, currentValue) {
+    const value = Number.isSafeInteger(currentValue) && currentValue > 0
+        ? currentValue
+        : 0;
+    const presetIndex = values.indexOf(value);
+    const customIndex = values.length;
+    const row = new Adw.ComboRow({
+        title,
+        subtitle,
+        model: Gtk.StringList.new(labels),
+        selected: presetIndex >= 0 ? presetIndex : customIndex,
+    });
+    const custom = new Adw.EntryRow({
+        title: `Custom ${title.toLowerCase()}`,
+        text: value ? String(value) : '',
+        input_purpose: Gtk.InputPurpose.DIGITS,
+        visible: row.selected === customIndex,
+    });
+    row.connect('notify::selected', () => {
+        custom.visible = row.selected === customIndex;
+    });
+    custom.connect('notify::text', () => custom.remove_css_class('error'));
+
+    return {
+        row,
+        custom,
+        value() {
+            if (row.selected < values.length)
+                return values[row.selected];
+            const text = custom.text.trim();
+            const parsed = /^\d+$/.test(text) ? Number(text) : 0;
+            if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+                custom.add_css_class('error');
+                custom.grab_focus();
+                return null;
+            }
+            return parsed;
+        },
+    };
 }
 
 export default class PromptPastePreferences extends ExtensionPreferences {
@@ -335,9 +395,15 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             const override = provider
                 ? `${provider.name}${action.model ? ` — ${action.model}` : ''}`
                 : 'Uses active provider and model';
+            const limits = action.inputLimit || action.outputLimit
+                ? `Limits: input ${formatTokenLimit(action.inputLimit)}, ` +
+                    `output ${formatTokenLimit(action.outputLimit)}`
+                : '';
             const row = new Adw.ActionRow({
                 title: action.name,
-                subtitle: `${override}\n${action.prompt}`,
+                subtitle: [override, limits, promptPreview(action.prompt)]
+                    .filter(Boolean).join('\n'),
+                subtitle_lines: 4,
                 use_markup: false,
             });
             const visible = new Gtk.Switch({
@@ -406,7 +472,45 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
         const fields = new Adw.PreferencesGroup({title: action ? 'Edit action' : 'New action'});
         const name = new Adw.EntryRow({title: 'Name', text: action?.name ?? ''});
-        const prompt = new Adw.EntryRow({title: 'Prompt', text: action?.prompt ?? ''});
+        const promptBuffer = new Gtk.TextBuffer();
+        promptBuffer.set_text(action?.prompt ?? '', -1);
+        const promptView = new Gtk.TextView({
+            buffer: promptBuffer,
+            wrap_mode: Gtk.WrapMode.WORD_CHAR,
+            accepts_tab: true,
+            left_margin: 8,
+            right_margin: 8,
+            top_margin: 8,
+            bottom_margin: 8,
+        });
+        const promptScroll = new Gtk.ScrolledWindow({
+            child: promptView,
+            hscrollbar_policy: Gtk.PolicyType.NEVER,
+            vscrollbar_policy: Gtk.PolicyType.AUTOMATIC,
+            min_content_height: 130,
+            max_content_height: 220,
+            propagate_natural_height: true,
+        });
+        promptScroll.add_css_class('frame');
+        const promptLabel = new Gtk.Label({
+            label: 'Prompt',
+            xalign: 0,
+        });
+        promptLabel.add_css_class('caption');
+        const promptBox = new Gtk.Box({
+            orientation: Gtk.Orientation.VERTICAL,
+            spacing: 6,
+            margin_start: 12,
+            margin_end: 12,
+            margin_top: 10,
+            margin_bottom: 12,
+        });
+        promptBox.append(promptLabel);
+        promptBox.append(promptScroll);
+        const prompt = new Adw.PreferencesRow({
+            title: 'Prompt',
+            child: promptBox,
+        });
         const providerNames = ['Use active provider', ...PROVIDERS.map(item => item.name)];
         const provider = new Adw.ComboRow({
             title: 'Provider override',
@@ -422,6 +526,18 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         provider.connect('notify::selected', () => {
             model.sensitive = provider.selected > 0;
         });
+        const inputLimit = tokenLimitControl(
+            'Input limit',
+            'Stops before sending when the selected text is over this estimate.',
+            INPUT_LIMIT_VALUES,
+            INPUT_LIMIT_LABELS,
+            action?.inputLimit ?? 0);
+        const outputLimit = tokenLimitControl(
+            'Output limit',
+            'Sets the maximum response length for this action.',
+            OUTPUT_LIMIT_VALUES,
+            OUTPUT_LIMIT_LABELS,
+            action?.outputLimit ?? 0);
         const visible = new Adw.SwitchRow({
             title: 'Show in panel menu',
             active: action?.enabled !== false,
@@ -430,6 +546,10 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         fields.add(prompt);
         fields.add(provider);
         fields.add(model);
+        fields.add(inputLimit.row);
+        fields.add(inputLimit.custom);
+        fields.add(outputLimit.row);
+        fields.add(outputLimit.custom);
         fields.add(visible);
         page.add(fields);
 
@@ -466,14 +586,19 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             destroy_with_parent: true,
             transient_for: this._actionsGroup.get_root(),
             default_width: 520,
-            default_height: 420,
+            default_height: 540,
             content,
         });
         cancel.connect('clicked', () => dialog.close());
         save.connect('clicked', () => {
             const actionName = name.text.trim();
-            const actionPrompt = prompt.text.trim();
+            const [promptStart, promptEnd] = promptBuffer.get_bounds();
+            const actionPrompt = promptBuffer.get_text(promptStart, promptEnd, false).trim();
             if (!actionName || !actionPrompt)
+                return;
+            const inputLimitValue = inputLimit.value();
+            const outputLimitValue = outputLimit.value();
+            if (inputLimitValue === null || outputLimitValue === null)
                 return;
             const actions = readActions(settings);
             const providerId = provider.selected > 0 ? PROVIDERS[provider.selected - 1]?.id ?? '' : '';
@@ -484,6 +609,8 @@ export default class PromptPastePreferences extends ExtensionPreferences {
                 enabled: visible.active,
                 provider: providerId,
                 model: providerId ? model.text.trim() : '',
+                inputLimit: inputLimitValue,
+                outputLimit: outputLimitValue,
             };
             const index = actions.findIndex(item => item.id === next.id);
             if (index >= 0)
