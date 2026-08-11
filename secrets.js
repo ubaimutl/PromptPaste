@@ -11,14 +11,17 @@ const KEY_SETTINGS = {
     vercel: 'vercel-api-key',
 };
 
-const SECRET_SCHEMA = new Secret.Schema(
-    'dev.ubai.PromptPaste.ApiKey',
-    Secret.SchemaFlags.NONE,
-    {provider: Secret.SchemaAttributeType.STRING});
+function createSecretSchema() {
+    return new Secret.Schema(
+        'dev.ubai.PromptPaste.ApiKey',
+        Secret.SchemaFlags.NONE,
+        {provider: Secret.SchemaAttributeType.STRING});
+}
 
 function lookup(provider, cancellable = null) {
+    const schema = createSecretSchema();
     return new Promise((resolve, reject) => {
-        Secret.password_lookup(SECRET_SCHEMA, {provider}, cancellable, (_source, result) => {
+        Secret.password_lookup(schema, {provider}, cancellable, (_source, result) => {
             try {
                 resolve(Secret.password_lookup_finish(result));
             } catch (error) {
@@ -29,9 +32,10 @@ function lookup(provider, cancellable = null) {
 }
 
 function store(provider, password, cancellable = null) {
+    const schema = createSecretSchema();
     return new Promise((resolve, reject) => {
         Secret.password_store(
-            SECRET_SCHEMA,
+            schema,
             {provider},
             Secret.COLLECTION_DEFAULT,
             `PromptPaste ${provider} API key`,
@@ -48,8 +52,9 @@ function store(provider, password, cancellable = null) {
 }
 
 function clear(provider, cancellable = null) {
+    const schema = createSecretSchema();
     return new Promise((resolve, reject) => {
-        Secret.password_clear(SECRET_SCHEMA, {provider}, cancellable, (_source, result) => {
+        Secret.password_clear(schema, {provider}, cancellable, (_source, result) => {
             try {
                 resolve(Secret.password_clear_finish(result));
             } catch (error) {

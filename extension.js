@@ -186,6 +186,13 @@ class ActionPalette extends ModalDialog.ModalDialog {
         button.grab_key_focus();
     }
 
+    destroy() {
+        for (const button of this._buttons)
+            button.destroy();
+        this._buttons = [];
+        super.destroy();
+    }
+
     _finish(action = null) {
         if (this._finished)
             return;
@@ -206,8 +213,6 @@ export default class PromptPasteExtension extends Extension {
         this._feedback = null;
         this._previewDialog = null;
         this._actionPalette = null;
-        this._actionPaletteSource = null;
-        this._actionPaletteManager = null;
         this._undo = null;
         this._undoClearId = null;
         this._pendingDelays = new Map();
@@ -293,6 +298,7 @@ export default class PromptPasteExtension extends Extension {
             this._iconResetId = null;
         }
         this._clearUndo();
+        this._undoItem.destroy();
         this._undoItem = null;
 
         for (const [id, resolve] of this._pendingDelays) {
@@ -399,13 +405,12 @@ export default class PromptPasteExtension extends Extension {
                 {provider: action.provider, model: action.model}));
         }
 
-        this._actionPaletteSource = source;
         this._actionPalette = palette;
-        this._actionPaletteManager = manager;
         palette.connect('open-state-changed', (_menu, open) => {
             if (!open && this._actionPalette === palette)
                 this._destroyActionPalette();
         });
+        palette.connect('destroy', () => source.destroy());
 
         const [pointerX, pointerY] = global.get_pointer();
         source.set_position(pointerX, pointerY + 8);
@@ -413,13 +418,10 @@ export default class PromptPasteExtension extends Extension {
     }
 
     _destroyActionPalette() {
-        const palette = this._actionPalette;
-        const source = this._actionPaletteSource;
-        this._actionPalette = null;
-        this._actionPaletteSource = null;
-        this._actionPaletteManager = null;
-        palette?.destroy();
-        source?.destroy();
+        if (this._actionPalette) {
+            this._actionPalette.destroy();
+            this._actionPalette = null;
+        }
     }
 
     async _run(mode, customPrompt = null, actionName = null, options = {}) {
