@@ -413,7 +413,8 @@ export default class PromptPasteExtension extends Extension {
         this._setIcon('content-loading-symbolic');
         this._showFeedback('Working…', false, 0);
         try {
-            const text = await this._readSelection(focusedWindow);
+            const selection = await this._readSelection(focusedWindow);
+            const text = selection.text;
             if (this._client !== client)
                 return;
             if (!text.trim())
@@ -422,12 +423,12 @@ export default class PromptPasteExtension extends Extension {
             if (this._client !== client)
                 return;
             if (this._settings.get_boolean('preview-results'))
-                this._showPreview(output, focusedWindow);
+                this._showPreview(output, focusedWindow, selection.primaryText);
             else
                 this._replace(
                     output, false,
                     actionName ?? (mode === 'rewrite' ? 'Rewritten' : 'Corrected'),
-                    focusedWindow);
+                    focusedWindow, selection.primaryText);
         } catch (error) {
             if (this._client !== client)
                 return;
@@ -440,11 +441,11 @@ export default class PromptPasteExtension extends Extension {
         }
     }
 
-    _showPreview(output, focusedWindow) {
+    _showPreview(output, focusedWindow, primaryText) {
         if (this._previewDialog)
             this._previewDialog.destroy();
         const dialog = new ResultDialog(output,
-            () => this._replace(output, true, 'Replaced', focusedWindow),
+            () => this._replace(output, true, 'Replaced', focusedWindow, primaryText),
             () => {
                 this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
                 this._setIcon('emblem-ok-symbolic', 1200);
@@ -461,10 +462,12 @@ export default class PromptPasteExtension extends Extension {
         this._showFeedback('Ready to review');
     }
 
-    _replace(output, delayed, message, focusedWindow) {
+    _replace(output, delayed, message, focusedWindow, primaryText) {
         this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
-        this._pasteWhenReady(delayed ? 200 : 0, message,
-            () => this._rememberUndo(focusedWindow));
+        this._pasteWhenReady(delayed ? 200 : 0, message, () => {
+            this._rememberUndo(focusedWindow);
+            this._discardConsumedPrimary(primaryText);
+        });
     }
 
     async _pasteWhenReady(initialDelay, message, onPasted = null) {
@@ -597,14 +600,25 @@ export default class PromptPasteExtension extends Extension {
 
     async _readSelection(focusedWindow) {
         if (this._usesExplicitCopy(focusedWindow))
-            return this._readExplicitCopy();
+            return {text: await this._readExplicitCopy(), primaryText: null};
 
         const text = await this._getClipboardText(St.ClipboardType.PRIMARY);
         if (text?.trim())
-            return text;
+            return {text, primaryText: text};
         if (!this._settings?.get_boolean('clipboard-fallback'))
-            return '';
-        return this._getClipboardText(St.ClipboardType.CLIPBOARD);
+            return {text: '', primaryText: null};
+        return {
+            text: await this._getClipboardText(St.ClipboardType.CLIPBOARD),
+            primaryText: null,
+        };
+    }
+
+    async _discardConsumedPrimary(consumedText) {
+        if (!consumedText || !await this._delay(100) || !this._clipboard)
+            return;
+        const currentText = await this._getClipboardText(St.ClipboardType.PRIMARY);
+        if (this._clipboard && currentText === consumedText)
+            this._clipboard.set_text(St.ClipboardType.PRIMARY, '');
     }
 
     _usesExplicitCopy(window) {
