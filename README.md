@@ -16,9 +16,13 @@ Supports local Ollama plus Groq, Gemini, OpenRouter, Cerebras, OpenAI, and Verce
 
 Clipboard text is sent to your chosen provider only when you run an action.
 
-Create your own actions, reuse `${language}`, `${tone}`, `${style}`, or `${selection}` in prompts, and optionally preview results before replacing text.
+Create your own actions, reuse `${language}`, `${tone}`, `${style}`, or `${selection}` in prompts, and optionally preview results before replacing text. Custom actions can use the active provider or override the provider and model, can be reordered, and can be hidden without being deleted.
 
-GNOME Extensions publication pending.
+## Installation
+
+Install PromptPaste from [GNOME Shell Extensions](https://extensions.gnome.org/extension/10540/ai-autocorrect/). It supports GNOME Shell 46 through 50.
+
+After installation, open the extension settings to choose a provider, model, and shortcuts. The optional action palette can open on the active monitor or near the pointer; leave it off to use the panel menu.
 
 ## What to know
 
@@ -31,8 +35,10 @@ Groq, Gemini, Cerebras, and selected OpenRouter models offer free access with us
 - **Ollama:** Runs locally and does not send text to an online provider when using a local Ollama server.
 - **OpenAI and Vercel AI Gateway:** Usage may be charged by the provider. PromptPaste itself does not charge anything.
 
-Your selected text is sent only when you run an action. Using previously copied clipboard text is optional and disabled by default. API keys are stored locally in GNOME settings, but they are not stored in an encrypted password vault. Do not share your keys, and revoke any key that may have been exposed.
+Your selected text is sent only when you run an action. Using previously copied clipboard text is optional and disabled by default. API keys are stored in the system Secret Service and can be managed through Passwords and Keys. Existing keys from older PromptPaste versions are migrated automatically and removed from GNOME settings.
 
 Firefox uses explicit-copy compatibility by default because its Wayland selection can be unreliable. This mode sends Ctrl+C and changes the regular clipboard. Other application IDs can be added in Settings.
 
 AI responses can be incorrect. Enable result preview if you want to review generated text before replacing the selection.
+
+After an automatic replacement, Undo last replacement remains available in the panel menu for 60 seconds and uses the target application's native undo action.

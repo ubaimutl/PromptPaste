@@ -2,6 +2,18 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup';
 
+import {getApiKey} from './secrets.js';
+
+const PROVIDER_NAMES = {
+    ollama: 'Ollama',
+    groq: 'Groq',
+    gemini: 'Gemini',
+    openrouter: 'OpenRouter',
+    cerebras: 'Cerebras',
+    openai: 'OpenAI',
+    vercel: 'Vercel AI Gateway',
+};
+
 function payload(text) {
     return `Transform only the text inside the tags.\nReturn only the transformed text.\n<text>\n${text}\n</text>`;
 }
@@ -35,7 +47,8 @@ function requestJson(session, url, headers, body, cancellable) {
                 try {
                     data = JSON.parse(text);
                 } catch {
-                    throw new Error(`Invalid response (${message.status_code})`);
+                    if (message.status_code < 400)
+                        throw new Error(`Invalid response (${message.status_code})`);
                 }
                 resolve({status: message.status_code, data});
             } catch (error) {
@@ -57,11 +70,46 @@ function openAiBody(model, prompt, text, cerebras = false) {
     return body;
 }
 
-function outputOrError(result) {
+function providerError(result, provider, model) {
+    const name = PROVIDER_NAMES[provider] ?? 'Provider';
+    const providerDetail = result.data?.error?.message ?? result.data?.error;
+    const detail = typeof providerDetail === 'string' ? providerDetail : '';
+    if (result.status === 401 || result.status === 403)
+        return new Error(`${name} rejected the API key. Check it in Settings.`);
+    if (result.status === 404)
+        return new Error(`${name} could not find model “${model}”.`);
+    if (result.status === 408)
+        return new Error(`${name} timed out. Try again.`);
+    if (result.status === 429)
+        return new Error(`${name} rate limit reached. Wait and try again.`);
+    if (result.status >= 500)
+        return new Error(`${name} is temporarily unavailable (${result.status}).`);
+    if (result.status >= 400)
+        return new Error(detail || `${name} rejected the request (${result.status}).`);
+    return new Error(detail || `${name} returned an unexpected response.`);
+}
+
+function networkError(error) {
+    if (!(error instanceof GLib.Error))
+        return error;
+    if (error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.TIMED_OUT))
+        return new Error('The request timed out. Try again.');
+    const offlineCodes = [
+        Gio.IOErrorEnum.NETWORK_UNREACHABLE,
+        Gio.IOErrorEnum.HOST_UNREACHABLE,
+        Gio.IOErrorEnum.NOT_CONNECTED,
+        Gio.IOErrorEnum.CONNECTION_REFUSED,
+    ];
+    if (offlineCodes.some(code => error.matches(Gio.IOErrorEnum, code)))
+        return new Error('Could not connect. Check your internet connection or local server.');
+    return error;
+}
+
+function outputOrError(result, provider, model) {
     const output = result.data?.choices?.[0]?.message?.content?.trim();
     if (output)
         return cleanOutput(output);
-    throw new Error(result.data?.error?.message ?? `Provider error (${result.status})`);
+    throw providerError(result, provider, model);
 }
 
 export class AiClient {
@@ -85,25 +133,31 @@ export class AiClient {
         this._settings = null;
     }
 
-    async transform(text, mode, customPrompt = null) {
+    async transform(text, mode, customPrompt = null, options = {}) {
         this.cancel();
         this._cancellable = new Gio.Cancellable();
-        const provider = this._settings.get_string('provider');
+        const selectedProvider = options.provider || this._settings.get_string('provider');
+        const provider = PROVIDER_NAMES[selectedProvider] ? selectedProvider : 'groq';
+        const model = options.model || this._settings.get_string(`${provider}-model`);
         const storedPrompt = this._settings.get_string(mode === 'rewrite' ? 'prompt-rewrite' : 'prompt-correct');
         const prompt = this._expandPrompt(customPrompt ?? storedPrompt, text);
-        if (provider === 'ollama')
-            return this._ollama(text, prompt);
-        if (provider === 'openai')
-            return this._openAi(text, prompt);
-        if (provider === 'gemini')
-            return this._gemini(text, prompt);
-        if (provider === 'openrouter')
-            return this._openRouter(text, prompt);
-        if (provider === 'vercel')
-            return this._vercel(text, prompt);
-        if (provider === 'cerebras')
-            return this._cerebras(text, prompt);
-        return this._groq(text, prompt);
+        try {
+            if (provider === 'ollama')
+                return await this._ollama(text, prompt, model);
+            if (provider === 'openai')
+                return await this._openAi(text, prompt, model);
+            if (provider === 'gemini')
+                return await this._gemini(text, prompt, model);
+            if (provider === 'openrouter')
+                return await this._openRouter(text, prompt, model);
+            if (provider === 'vercel')
+                return await this._vercel(text, prompt, model);
+            if (provider === 'cerebras')
+                return await this._cerebras(text, prompt, model);
+            return await this._groq(text, prompt, model);
+        } catch (error) {
+            throw networkError(error);
+        }
     }
 
     _expandPrompt(prompt, text) {
@@ -117,16 +171,15 @@ export class AiClient {
             (_match, name) => values[name]);
     }
 
-    _required(key, label) {
-        const value = this._settings.get_string(key).trim();
+    async _required(provider) {
+        const value = await getApiKey(this._settings, provider, this._cancellable);
         if (!value)
-            throw new Error(`Add a ${label} API key in Settings.`);
+            throw new Error(`Add a ${PROVIDER_NAMES[provider]} API key in Settings.`);
         return value;
     }
 
-    async _groq(text, prompt) {
-        const key = this._required('groq-api-key', 'Groq');
-        const model = this._settings.get_string('groq-model');
+    async _groq(text, prompt, model) {
+        const key = await this._required('groq');
         const body = openAiBody(model, prompt, text);
         if (model.startsWith('openai/gpt-oss-')) {
             body.reasoning_effort = 'low';
@@ -136,14 +189,14 @@ export class AiClient {
             'https://api.groq.com/openai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
             body, this._cancellable);
-        return outputOrError(result);
+        return outputOrError(result, 'groq', model);
     }
 
-    async _ollama(text, prompt) {
+    async _ollama(text, prompt, model) {
         const baseUrl = this._settings.get_string('ollama-url').replace(/\/$/, '');
         const result = await requestJson(this._session,
             `${baseUrl}/api/chat`, {}, {
-                model: this._settings.get_string('ollama-model'),
+                model,
                 messages: [
                     {role: 'system', content: prompt},
                     {role: 'user', content: payload(text)},
@@ -153,23 +206,23 @@ export class AiClient {
         const output = result.data?.message?.content?.trim();
         if (output)
             return cleanOutput(output);
-        throw new Error(result.data?.error ?? `Ollama error (${result.status})`);
+        throw providerError(result, 'ollama', model);
     }
 
-    async _openAi(text, prompt) {
-        const key = this._required('openai-api-key', 'OpenAI');
+    async _openAi(text, prompt, model) {
+        const key = await this._required('openai');
         const result = await requestJson(this._session,
             'https://api.openai.com/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('openai-model'), prompt, text), this._cancellable);
-        return outputOrError(result);
+            openAiBody(model, prompt, text), this._cancellable);
+        return outputOrError(result, 'openai', model);
     }
 
-    async _gemini(text, prompt) {
-        const key = this._required('gemini-api-key', 'Gemini');
-        const model = encodeURIComponent(this._settings.get_string('gemini-model'));
+    async _gemini(text, prompt, model) {
+        const key = await this._required('gemini');
+        const encodedModel = encodeURIComponent(model);
         const result = await requestJson(this._session,
-            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`,
+            `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}:generateContent?key=${encodeURIComponent(key)}`,
             {}, {
                 systemInstruction: {parts: [{text: prompt}]},
                 contents: [{role: 'user', parts: [{text: payload(text)}]}],
@@ -178,33 +231,33 @@ export class AiClient {
         const output = result.data?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim();
         if (output)
             return cleanOutput(output);
-        throw new Error(result.data?.error?.message ?? `Gemini error (${result.status})`);
+        throw providerError(result, 'gemini', model);
     }
 
-    async _openRouter(text, prompt) {
-        const key = this._required('openrouter-api-key', 'OpenRouter');
+    async _openRouter(text, prompt, model) {
+        const key = await this._required('openrouter');
         const result = await requestJson(this._session,
             'https://openrouter.ai/api/v1/chat/completions',
             {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
-            openAiBody(this._settings.get_string('openrouter-model'), prompt, text), this._cancellable);
-        return outputOrError(result);
+            openAiBody(model, prompt, text), this._cancellable);
+        return outputOrError(result, 'openrouter', model);
     }
 
-    async _vercel(text, prompt) {
-        const key = this._required('vercel-api-key', 'Vercel AI Gateway');
+    async _vercel(text, prompt, model) {
+        const key = await this._required('vercel');
         const result = await requestJson(this._session,
             'https://ai-gateway.vercel.sh/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('vercel-model'), prompt, text), this._cancellable);
-        return outputOrError(result);
+            openAiBody(model, prompt, text), this._cancellable);
+        return outputOrError(result, 'vercel', model);
     }
 
-    async _cerebras(text, prompt) {
-        const key = this._required('cerebras-api-key', 'Cerebras');
+    async _cerebras(text, prompt, model) {
+        const key = await this._required('cerebras');
         const result = await requestJson(this._session,
             'https://api.cerebras.ai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(this._settings.get_string('cerebras-model'), prompt, text, true), this._cancellable);
-        return outputOrError(result);
+            openAiBody(model, prompt, text, true), this._cancellable);
+        return outputOrError(result, 'cerebras', model);
     }
 }

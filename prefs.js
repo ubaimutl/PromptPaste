@@ -7,9 +7,10 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import {readActions, writeActions} from './actions.js';
 import {abortModelRequests, fetchModels, PROVIDERS} from './models.js';
+import {getApiKey, setApiKey} from './secrets.js';
 
-function entry(group, settings, key, title, password = false) {
-    const row = password ? new Adw.PasswordEntryRow({title}) : new Adw.EntryRow({title});
+function entry(group, settings, key, title) {
+    const row = new Adw.EntryRow({title});
     settings.bind(key, row, 'text', Gio.SettingsBindFlags.DEFAULT);
     group.add(row);
     return row;
@@ -18,6 +19,7 @@ function entry(group, settings, key, title, password = false) {
 export default class PromptPastePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
+        this._keyCancellable = new Gio.Cancellable();
         const page = new Adw.PreferencesPage();
 
         const providerGroup = new Adw.PreferencesGroup({title: 'Provider'});
@@ -55,6 +57,19 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         this._shortcutRow(shortcuts, settings, 'correct-shortcut', 'Correct');
         this._shortcutRow(shortcuts, settings, 'rewrite-shortcut', 'Rewrite');
         this._shortcutRow(shortcuts, settings, 'actions-shortcut', 'Open actions');
+        const palettePositions = ['disabled', 'monitor-center', 'near-pointer'];
+        const actionPalette = new Adw.ComboRow({
+            title: 'Action palette',
+            subtitle: 'Choose where the Open actions shortcut displays actions.',
+            model: Gtk.StringList.new(['Off', 'Active monitor center', 'Near pointer']),
+        });
+        actionPalette.selected = Math.max(0,
+            palettePositions.indexOf(settings.get_string('action-palette-position')));
+        actionPalette.connect('notify::selected', () => {
+            settings.set_string('action-palette-position',
+                palettePositions[actionPalette.selected] ?? 'disabled');
+        });
+        shortcuts.add(actionPalette);
         page.add(shortcuts);
 
         const capture = new Adw.PreferencesGroup({
@@ -106,6 +121,8 @@ export default class PromptPastePreferences extends ExtensionPreferences {
 
         window.connect('close-request', () => {
             abortModelRequests();
+            this._keyCancellable.cancel();
+            this._keyCancellable = null;
             this._providerSettings = null;
             this._providerRows = null;
             this._modelRow = null;
@@ -126,10 +143,13 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const info = PROVIDERS.find(item => item.id === provider) ?? PROVIDERS[0];
         provider = info.id;
         this._providerSettings.title = info.name;
+        this._providerSettings.description = provider === 'ollama'
+            ? 'Runs on your configured local server.'
+            : 'API keys are stored securely in Passwords and Keys.';
         if (provider === 'ollama')
             this._providerRows.push(entry(this._providerSettings, settings, 'ollama-url', 'Address'));
         else
-            this._providerRows.push(entry(this._providerSettings, settings, info.key, 'API key', true));
+            this._providerRows.push(this._secretEntry(settings, provider));
 
         const modelRow = new Adw.ComboRow({title: 'Model', enable_search: true});
         const refresh = new Gtk.Button({
@@ -161,6 +181,61 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         });
         refresh.connect('clicked', () => this._refreshModels(settings, provider, modelRow, refresh));
         custom.connect('clicked', () => this._customModel(settings, provider, modelRow));
+    }
+
+    _secretEntry(settings, provider) {
+        const row = new Adw.PasswordEntryRow({
+            title: 'API key',
+            show_apply_button: true,
+        });
+        const status = new Gtk.Image({
+            icon_name: 'content-loading-symbolic',
+            tooltip_text: 'Loading from Passwords and Keys…',
+        });
+        row.add_suffix(status);
+        row.sensitive = false;
+        this._providerSettings.add(row);
+
+        getApiKey(settings, provider, this._keyCancellable).then(key => {
+            if (row.get_parent()) {
+                row.text = key;
+                row.sensitive = true;
+                status.icon_name = key ? 'emblem-ok-symbolic' : 'dialog-password-symbolic';
+                status.tooltip_text = key ? 'Stored securely in Passwords and Keys' : 'No API key saved';
+            }
+        }).catch(error => {
+            if (row.get_parent()) {
+                row.sensitive = true;
+                status.icon_name = 'dialog-error-symbolic';
+                status.tooltip_text = error.message ?? String(error);
+            }
+        });
+
+        const save = async () => {
+            row.sensitive = false;
+            status.icon_name = 'content-loading-symbolic';
+            status.tooltip_text = 'Saving…';
+            try {
+                await setApiKey(settings, provider, row.text, this._keyCancellable);
+                if (row.get_parent()) {
+                    status.icon_name = row.text.trim() ? 'emblem-ok-symbolic' : 'dialog-password-symbolic';
+                    status.tooltip_text = row.text.trim()
+                        ? 'Stored securely in Passwords and Keys'
+                        : 'API key removed';
+                }
+            } catch (error) {
+                if (row.get_parent()) {
+                    status.icon_name = 'dialog-error-symbolic';
+                    status.tooltip_text = error.message ?? String(error);
+                }
+            } finally {
+                if (row.get_parent())
+                    row.sensitive = true;
+            }
+        };
+        row.connect('apply', save);
+        row.connect('entry-activated', save);
+        return row;
     }
 
     _cachedModels(settings, provider) {
@@ -254,8 +329,46 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             this._actionsGroup.remove(row);
         this._actionRows = [];
 
-        for (const action of readActions(settings)) {
-            const row = new Adw.ActionRow({title: action.name, subtitle: action.prompt});
+        const storedActions = readActions(settings);
+        storedActions.forEach((action, index) => {
+            const provider = PROVIDERS.find(item => item.id === action.provider);
+            const override = provider
+                ? `${provider.name}${action.model ? ` — ${action.model}` : ''}`
+                : 'Uses active provider and model';
+            const row = new Adw.ActionRow({
+                title: action.name,
+                subtitle: `${override}\n${action.prompt}`,
+                use_markup: false,
+            });
+            const visible = new Gtk.Switch({
+                active: action.enabled,
+                tooltip_text: 'Show in panel menu',
+                valign: Gtk.Align.CENTER,
+            });
+            visible.connect('notify::active', () => {
+                const actions = readActions(settings);
+                const current = actions.find(item => item.id === action.id);
+                if (current) {
+                    current.enabled = visible.active;
+                    writeActions(settings, actions);
+                }
+            });
+            const up = new Gtk.Button({
+                icon_name: 'go-up-symbolic',
+                tooltip_text: 'Move up',
+                sensitive: index > 0,
+                valign: Gtk.Align.CENTER,
+            });
+            up.add_css_class('flat');
+            up.connect('clicked', () => this._moveAction(settings, action.id, -1));
+            const down = new Gtk.Button({
+                icon_name: 'go-down-symbolic',
+                tooltip_text: 'Move down',
+                sensitive: index < storedActions.length - 1,
+                valign: Gtk.Align.CENTER,
+            });
+            down.add_css_class('flat');
+            down.connect('clicked', () => this._moveAction(settings, action.id, 1));
             const edit = new Gtk.Button({
                 icon_name: 'document-edit-symbolic',
                 tooltip_text: 'Edit action',
@@ -263,10 +376,13 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             });
             edit.add_css_class('flat');
             edit.connect('clicked', () => this._editAction(settings, action));
+            row.add_suffix(visible);
+            row.add_suffix(up);
+            row.add_suffix(down);
             row.add_suffix(edit);
             this._actionsGroup.add(row);
             this._actionRows.push(row);
-        }
+        });
 
         const add = new Adw.ActionRow({title: 'Add action', activatable: true});
         add.add_suffix(new Gtk.Image({icon_name: 'list-add-symbolic'}));
@@ -275,13 +391,46 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         this._actionRows.push(add);
     }
 
+    _moveAction(settings, id, offset) {
+        const actions = readActions(settings);
+        const index = actions.findIndex(action => action.id === id);
+        const target = index + offset;
+        if (index < 0 || target < 0 || target >= actions.length)
+            return;
+        [actions[index], actions[target]] = [actions[target], actions[index]];
+        writeActions(settings, actions);
+        this._renderActions(settings);
+    }
+
     _editAction(settings, action = null) {
         const page = new Adw.PreferencesPage();
         const fields = new Adw.PreferencesGroup({title: action ? 'Edit action' : 'New action'});
         const name = new Adw.EntryRow({title: 'Name', text: action?.name ?? ''});
         const prompt = new Adw.EntryRow({title: 'Prompt', text: action?.prompt ?? ''});
+        const providerNames = ['Use active provider', ...PROVIDERS.map(item => item.name)];
+        const provider = new Adw.ComboRow({
+            title: 'Provider override',
+            model: Gtk.StringList.new(providerNames),
+        });
+        provider.selected = Math.max(0,
+            PROVIDERS.findIndex(item => item.id === action?.provider) + 1);
+        const model = new Adw.EntryRow({
+            title: 'Model override (optional)',
+            text: action?.model ?? '',
+            sensitive: provider.selected > 0,
+        });
+        provider.connect('notify::selected', () => {
+            model.sensitive = provider.selected > 0;
+        });
+        const visible = new Adw.SwitchRow({
+            title: 'Show in panel menu',
+            active: action?.enabled !== false,
+        });
         fields.add(name);
         fields.add(prompt);
+        fields.add(provider);
+        fields.add(model);
+        fields.add(visible);
         page.add(fields);
 
         const buttons = new Gtk.Box({
@@ -317,7 +466,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             destroy_with_parent: true,
             transient_for: this._actionsGroup.get_root(),
             default_width: 520,
-            default_height: 260,
+            default_height: 420,
             content,
         });
         cancel.connect('clicked', () => dialog.close());
@@ -327,7 +476,15 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             if (!actionName || !actionPrompt)
                 return;
             const actions = readActions(settings);
-            const next = {id: action?.id ?? GLib.uuid_string_random(), name: actionName, prompt: actionPrompt};
+            const providerId = provider.selected > 0 ? PROVIDERS[provider.selected - 1]?.id ?? '' : '';
+            const next = {
+                id: action?.id ?? GLib.uuid_string_random(),
+                name: actionName,
+                prompt: actionPrompt,
+                enabled: visible.active,
+                provider: providerId,
+                model: providerId ? model.text.trim() : '',
+            };
             const index = actions.findIndex(item => item.id === next.id);
             if (index >= 0)
                 actions[index] = next;

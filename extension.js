@@ -85,6 +85,100 @@ class ResultDialog extends ModalDialog.ModalDialog {
     }
 });
 
+const ActionPalette = GObject.registerClass(
+class ActionPalette extends ModalDialog.ModalDialog {
+    _init(actions, onActivate, onClose) {
+        super._init({destroyOnClose: true, styleClass: 'promptpaste-palette'});
+        this._actions = actions;
+        this._buttons = [];
+        this._selected = 0;
+        this._finished = false;
+        this._onActivate = onActivate;
+        this._onClose = onClose;
+
+        this.contentLayout.add_child(new St.Label({
+            text: 'PromptPaste',
+            style_class: 'promptpaste-palette-title',
+        }));
+        const list = new St.BoxLayout(SHELL_MAJOR >= 48
+            ? {orientation: Clutter.Orientation.VERTICAL, style_class: 'promptpaste-palette-list'}
+            : {vertical: true, style_class: 'promptpaste-palette-list'});
+        this.contentLayout.add_child(list);
+
+        actions.forEach((action, index) => {
+            if (index === 2) {
+                list.add_child(new St.Widget({
+                    style_class: 'promptpaste-palette-separator',
+                    x_expand: true,
+                }));
+            }
+            const row = new St.BoxLayout({style_class: 'promptpaste-palette-row'});
+            row.add_child(new St.Icon({
+                icon_name: action.icon,
+                style_class: 'promptpaste-palette-icon',
+            }));
+            row.add_child(new St.Label({
+                text: action.name,
+                x_expand: true,
+                y_align: Clutter.ActorAlign.CENTER,
+            }));
+            const button = new St.Button({
+                child: row,
+                can_focus: true,
+                reactive: true,
+                track_hover: true,
+                style_class: 'promptpaste-palette-item',
+                x_expand: true,
+            });
+            button.connect('clicked', () => this._finish(action));
+            list.add_child(button);
+            this._buttons.push(button);
+        });
+
+        this._select(0);
+        this.setInitialKeyFocus(this._buttons[0]);
+    }
+
+    vfunc_key_press_event(event) {
+        const key = event.get_key_symbol();
+        if (key === Clutter.KEY_Escape) {
+            this._finish();
+            return Clutter.EVENT_STOP;
+        }
+        if (key === Clutter.KEY_Up) {
+            this._select(this._selected - 1);
+            return Clutter.EVENT_STOP;
+        }
+        if (key === Clutter.KEY_Down) {
+            this._select(this._selected + 1);
+            return Clutter.EVENT_STOP;
+        }
+        if (key === Clutter.KEY_Return || key === Clutter.KEY_KP_Enter) {
+            this._finish(this._actions[this._selected]);
+            return Clutter.EVENT_STOP;
+        }
+        return super.vfunc_key_press_event(event);
+    }
+
+    _select(index) {
+        this._buttons[this._selected]?.remove_style_pseudo_class('selected');
+        this._selected = (index + this._buttons.length) % this._buttons.length;
+        const button = this._buttons[this._selected];
+        button.add_style_pseudo_class('selected');
+        button.grab_key_focus();
+    }
+
+    _finish(action = null) {
+        if (this._finished)
+            return;
+        this._finished = true;
+        this.close();
+        this._onClose();
+        if (action)
+            this._onActivate(action);
+    }
+});
+
 export default class PromptPasteExtension extends Extension {
     enable() {
         this._busy = false;
@@ -93,6 +187,11 @@ export default class PromptPasteExtension extends Extension {
         this._feedbackFollowId = null;
         this._feedback = null;
         this._previewDialog = null;
+        this._actionPalette = null;
+        this._actionPaletteSource = null;
+        this._actionPaletteManager = null;
+        this._undo = null;
+        this._undoClearId = null;
         this._pendingDelays = new Map();
         this._settings = this.getSettings();
         this._client = new AiClient(this._settings);
@@ -101,9 +200,11 @@ export default class PromptPasteExtension extends Extension {
             .get_default_seat()
             .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
 
+        this._defaultIcon = Gio.icon_new_for_string(
+            this.path + '/icons/promptpaste-symbolic.svg');
         this._indicator = new PanelMenu.Button(0, this.metadata.name, false);
         this._icon = new St.Icon({
-            icon_name: 'tools-check-spelling-symbolic',
+            gicon: this._defaultIcon,
             style_class: 'system-status-icon',
         });
         this._indicator.add_child(this._icon);
@@ -123,6 +224,12 @@ export default class PromptPasteExtension extends Extension {
             () => this._rebuildActions());
 
         this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._undoItem = new PopupMenu.PopupMenuItem('Undo last replacement');
+        this._undoItem.setSensitive(false);
+        this._undoItem.connect('activate', () => this._undoLast());
+        this._indicator.menu.addMenuItem(this._undoItem);
+
+        this._indicator.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         const settings = new PopupMenu.PopupMenuItem('Settings');
         settings.connect('activate', () => this.openPreferences());
         this._indicator.menu.addMenuItem(settings);
@@ -132,7 +239,7 @@ export default class PromptPasteExtension extends Extension {
         this._addShortcut('rewrite-shortcut', 'rewrite');
         Main.wm.addKeybinding('actions-shortcut', this._settings,
             Meta.KeyBindingFlags.NONE, Shell.ActionMode.NORMAL,
-            () => this._indicator.menu.open());
+            () => this._openActions());
     }
 
     disable() {
@@ -148,6 +255,7 @@ export default class PromptPasteExtension extends Extension {
             this._previewDialog.destroy();
             this._previewDialog = null;
         }
+        this._destroyActionPalette();
 
         if (this._feedbackFollowId) {
             GLib.Source.remove(this._feedbackFollowId);
@@ -166,6 +274,8 @@ export default class PromptPasteExtension extends Extension {
             GLib.Source.remove(this._iconResetId);
             this._iconResetId = null;
         }
+        this._clearUndo();
+        this._undoItem = null;
 
         for (const [id, resolve] of this._pendingDelays) {
             GLib.Source.remove(id);
@@ -178,6 +288,7 @@ export default class PromptPasteExtension extends Extension {
         this._actionsSection = null;
         this._icon.destroy();
         this._icon = null;
+        this._defaultIcon = null;
         this._indicator.destroy();
         this._indicator = null;
         this._keyboard = null;
@@ -193,14 +304,107 @@ export default class PromptPasteExtension extends Extension {
 
     _rebuildActions() {
         this._actionsSection.removeAll();
-        for (const action of readActions(this._settings)) {
+        for (const action of readActions(this._settings).filter(item => item.enabled)) {
             const item = new PopupMenu.PopupMenuItem(action.name);
-            item.connect('activate', () => this._run('custom', action.prompt, action.name));
+            item.connect('activate', () => this._run(
+                'custom', action.prompt, action.name,
+                {provider: action.provider, model: action.model}));
             this._actionsSection.addMenuItem(item);
         }
     }
 
-    async _run(mode, customPrompt = null, actionName = null) {
+    _openActions() {
+        const position = this._settings.get_string('action-palette-position');
+        if (position !== 'monitor-center' && position !== 'near-pointer') {
+            this._indicator.menu.open();
+            return;
+        }
+        if (this._actionPalette)
+            return;
+
+        const actions = [
+            {name: 'Correct selected text', mode: 'correct', icon: 'tools-check-spelling-symbolic'},
+            {name: 'Rewrite selected text', mode: 'rewrite', icon: 'document-edit-symbolic'},
+            ...readActions(this._settings)
+                .filter(action => action.enabled)
+                .map(action => ({
+                    name: action.name,
+                    mode: 'custom',
+                    prompt: action.prompt,
+                    provider: action.provider,
+                    model: action.model,
+                    icon: 'system-run-symbolic',
+                })),
+        ];
+
+        if (position === 'monitor-center') {
+            const palette = new ActionPalette(actions,
+                action => this._run(
+                    action.mode, action.prompt,
+                    action.mode === 'custom' ? action.name : null,
+                    {provider: action.provider ?? '', model: action.model ?? ''}),
+                () => {
+                    if (this._actionPalette === palette)
+                        this._actionPalette = null;
+                });
+            this._actionPalette = palette;
+            palette.open();
+            return;
+        }
+
+        const source = new St.Widget({
+            reactive: true,
+            width: 1,
+            height: 1,
+            opacity: 0,
+        });
+        Main.uiGroup.add_child(source);
+        const palette = new PopupMenu.PopupMenu(source, 0.5, St.Side.TOP);
+        Main.uiGroup.add_child(palette.actor);
+        const manager = new PopupMenu.PopupMenuManager(source);
+        manager.addMenu(palette);
+
+        const addAction = (label, callback) => {
+            const item = new PopupMenu.PopupMenuItem(label);
+            item.connect('activate', callback);
+            palette.addMenuItem(item);
+        };
+        addAction('Correct selected text', () => this._run('correct'));
+        addAction('Rewrite selected text', () => this._run('rewrite'));
+
+        const customActions = actions.slice(2);
+        if (customActions.length > 0)
+            palette.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        for (const action of customActions) {
+            addAction(action.name, () => this._run(
+                'custom', action.prompt, action.name,
+                {provider: action.provider, model: action.model}));
+        }
+
+        this._actionPaletteSource = source;
+        this._actionPalette = palette;
+        this._actionPaletteManager = manager;
+        palette.connect('open-state-changed', (_menu, open) => {
+            if (!open && this._actionPalette === palette)
+                this._destroyActionPalette();
+        });
+
+        const [pointerX, pointerY] = global.get_pointer();
+        source.set_position(pointerX, pointerY + 8);
+        palette.open();
+    }
+
+    _destroyActionPalette() {
+        const palette = this._actionPalette;
+        const source = this._actionPaletteSource;
+        this._actionPalette = null;
+        this._actionPaletteSource = null;
+        this._actionPaletteManager = null;
+        palette?.destroy();
+        source?.destroy();
+    }
+
+    async _run(mode, customPrompt = null, actionName = null, options = {}) {
         if (this._busy)
             return;
         const client = this._client;
@@ -214,30 +418,33 @@ export default class PromptPasteExtension extends Extension {
                 return;
             if (!text.trim())
                 throw new Error('Select text first.');
-            const output = await client.transform(text, mode, customPrompt);
+            const output = await client.transform(text, mode, customPrompt, options);
             if (this._client !== client)
                 return;
             if (this._settings.get_boolean('preview-results'))
-                this._showPreview(output);
+                this._showPreview(output, focusedWindow);
             else
-                this._replace(output, false, actionName ?? (mode === 'rewrite' ? 'Rewritten' : 'Corrected'));
+                this._replace(
+                    output, false,
+                    actionName ?? (mode === 'rewrite' ? 'Rewritten' : 'Corrected'),
+                    focusedWindow);
         } catch (error) {
             if (this._client !== client)
                 return;
             if (error instanceof GLib.Error && error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
-            this._setIcon('tools-check-spelling-symbolic');
+            this._restoreDefaultIcon();
             this._showFeedback(error.message ?? String(error), true, 3500);
         } finally {
             this._busy = false;
         }
     }
 
-    _showPreview(output) {
+    _showPreview(output, focusedWindow) {
         if (this._previewDialog)
             this._previewDialog.destroy();
         const dialog = new ResultDialog(output,
-            () => this._replace(output, true, 'Replaced'),
+            () => this._replace(output, true, 'Replaced', focusedWindow),
             () => {
                 this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
                 this._setIcon('emblem-ok-symbolic', 1200);
@@ -250,31 +457,74 @@ export default class PromptPasteExtension extends Extension {
             });
         this._previewDialog = dialog;
         dialog.open();
-        this._setIcon('tools-check-spelling-symbolic');
+        this._restoreDefaultIcon();
         this._showFeedback('Ready to review');
     }
 
-    _replace(output, delayed, message) {
+    _replace(output, delayed, message, focusedWindow) {
         this._clipboard.set_text(St.ClipboardType.CLIPBOARD, output);
-        this._pasteWhenReady(delayed ? 200 : 0, message);
+        this._pasteWhenReady(delayed ? 200 : 0, message,
+            () => this._rememberUndo(focusedWindow));
     }
 
-    async _pasteWhenReady(initialDelay, message) {
+    async _pasteWhenReady(initialDelay, message, onPasted = null) {
         if (initialDelay > 0 && !await this._delay(initialDelay))
             return;
         const released = await this._waitForModifiersReleased();
         if (!this._keyboard)
             return;
         if (!released) {
-            this._setIcon('tools-check-spelling-symbolic');
+            this._restoreDefaultIcon();
             this._showFeedback('Release the shortcut keys and try again.', true, 3500);
             return;
         }
         if (!await this._delay(25) || !this._keyboard)
             return;
         this._paste();
+        onPasted?.();
         this._setIcon('emblem-ok-symbolic', 1200);
         this._showFeedback(message);
+    }
+
+    _rememberUndo(focusedWindow) {
+        this._clearUndo();
+        this._undo = {focusedWindow};
+        this._undoItem.setSensitive(true);
+        this._undoClearId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 60, () => {
+            this._undoClearId = null;
+            this._clearUndo();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    async _undoLast() {
+        if (!this._undo)
+            return;
+        if (global.display.focus_window !== this._undo.focusedWindow) {
+            this._showFeedback('Return to the original window before undoing.', true, 3500);
+            return;
+        }
+
+        const released = await this._waitForModifiersReleased();
+        if (!released || !this._keyboard) {
+            this._showFeedback('Release the shortcut keys and try again.', true, 3500);
+            return;
+        }
+        if (!await this._delay(25) || !this._keyboard)
+            return;
+        this._sendUndo();
+        this._clearUndo();
+        this._setIcon('emblem-ok-symbolic', 1200);
+        this._showFeedback('Replacement undone');
+    }
+
+    _clearUndo() {
+        if (this._undoClearId) {
+            GLib.Source.remove(this._undoClearId);
+            this._undoClearId = null;
+        }
+        this._undo = null;
+        this._undoItem?.setSensitive(false);
     }
 
     _showFeedback(message, error = false, duration = 1500) {
@@ -477,7 +727,16 @@ export default class PromptPasteExtension extends Extension {
         this._keyboard.notify_keyval(time, Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
     }
 
+    _sendUndo() {
+        const time = GLib.get_monotonic_time();
+        this._keyboard.notify_keyval(time, Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_z, Clutter.KeyState.PRESSED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_z, Clutter.KeyState.RELEASED);
+        this._keyboard.notify_keyval(time, Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
+    }
+
     _setIcon(name, resetAfter = 0) {
+        this._icon.gicon = null;
         this._icon.icon_name = name;
         if (this._iconResetId) {
             GLib.Source.remove(this._iconResetId);
@@ -485,10 +744,21 @@ export default class PromptPasteExtension extends Extension {
         }
         if (resetAfter) {
             this._iconResetId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, resetAfter, () => {
-                this._icon.icon_name = 'tools-check-spelling-symbolic';
+                this._icon.icon_name = null;
+                this._icon.gicon = this._defaultIcon;
                 this._iconResetId = null;
                 return GLib.SOURCE_REMOVE;
             });
         }
     }
+
+    _restoreDefaultIcon() {
+        if (this._iconResetId) {
+            GLib.Source.remove(this._iconResetId);
+            this._iconResetId = null;
+        }
+        this._icon.icon_name = null;
+        this._icon.gicon = this._defaultIcon;
+    }
+
 }

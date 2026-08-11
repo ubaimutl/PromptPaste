@@ -1,5 +1,8 @@
+import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Soup from 'gi://Soup';
+
+import {getApiKey} from './secrets.js';
 
 export const PROVIDERS = [
     {id: 'ollama', name: 'Ollama (local)', key: null},
@@ -12,14 +15,30 @@ export const PROVIDERS = [
 ];
 
 const activeSessions = new Set();
+let requestGeneration = 0;
 
 export function abortModelRequests() {
+    requestGeneration++;
     for (const session of activeSessions)
         session.abort();
     activeSessions.clear();
 }
 
-function getJson(url, headers = {}) {
+function requestError(status, provider, detail) {
+    if (status === 401 || status === 403)
+        return new Error(`${provider} rejected the API key. Check it and try again.`);
+    if (status === 404)
+        return new Error(`${provider} model list is unavailable.`);
+    if (status === 408)
+        return new Error(`${provider} timed out. Try again.`);
+    if (status === 429)
+        return new Error(`${provider} rate limit reached. Wait and try again.`);
+    if (status >= 500)
+        return new Error(`${provider} is temporarily unavailable (${status}).`);
+    return new Error(detail || `${provider} rejected the request (${status}).`);
+}
+
+function getJson(url, headers = {}, provider = 'Provider') {
     return new Promise((resolve, reject) => {
         const session = new Soup.Session({timeout: 20});
         const message = Soup.Message.new('GET', url);
@@ -30,12 +49,32 @@ function getJson(url, headers = {}) {
             try {
                 const bytes = session.send_and_read_finish(result);
                 const text = new TextDecoder().decode(bytes.get_data());
-                const data = JSON.parse(text);
-                if (message.status_code < 200 || message.status_code >= 300)
-                    throw new Error(data?.error?.message ?? data?.error ?? `Request failed (${message.status_code})`);
+                let data = {};
+                try {
+                    data = JSON.parse(text);
+                } catch {
+                    if (message.status_code < 400)
+                        throw new Error(`Invalid response (${message.status_code})`);
+                }
+                if (message.status_code < 200 || message.status_code >= 300) {
+                    const providerDetail = data?.error?.message ?? data?.error;
+                    const detail = typeof providerDetail === 'string' ? providerDetail : '';
+                    throw requestError(message.status_code, provider, detail);
+                }
                 resolve(data);
             } catch (error) {
-                reject(error);
+                if (error instanceof GLib.Error &&
+                    error.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.TIMED_OUT))
+                    reject(new Error(`${provider} timed out. Try again.`));
+                else if (error instanceof GLib.Error && [
+                    Gio.IOErrorEnum.NETWORK_UNREACHABLE,
+                    Gio.IOErrorEnum.HOST_UNREACHABLE,
+                    Gio.IOErrorEnum.NOT_CONNECTED,
+                    Gio.IOErrorEnum.CONNECTION_REFUSED,
+                ].some(code => error.matches(Gio.IOErrorEnum, code)))
+                    reject(new Error(`Could not connect to ${provider}.`));
+                else
+                    reject(error);
             } finally {
                 activeSessions.delete(session);
                 session.abort();
@@ -44,10 +83,10 @@ function getJson(url, headers = {}) {
     });
 }
 
-function requiredKey(settings, key, provider) {
-    const value = settings.get_string(key).trim();
+async function requiredKey(settings, provider) {
+    const value = await getApiKey(settings, provider);
     if (!value)
-        throw new Error(`Add a ${provider} API key first.`);
+        throw new Error(`Add a ${PROVIDERS.find(item => item.id === provider)?.name} API key first.`);
     return value;
 }
 
@@ -60,23 +99,32 @@ function uniqueModels(models) {
 }
 
 export async function fetchModels(settings, provider) {
+    const generation = requestGeneration;
+    const ensureCurrent = () => {
+        if (generation !== requestGeneration)
+            throw new Error('Request cancelled');
+    };
     let data;
     let models;
     if (provider === 'ollama') {
         const baseUrl = settings.get_string('ollama-url').replace(/\/$/, '');
-        data = await getJson(`${baseUrl}/api/tags`);
+        data = await getJson(`${baseUrl}/api/tags`, {}, 'Ollama');
         models = (data.models ?? []).map(model => ({id: model.model ?? model.name, name: model.name}));
     } else if (provider === 'gemini') {
-        const key = requiredKey(settings, 'gemini-api-key', 'Gemini');
-        data = await getJson(`https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(key)}`);
+        const key = await requiredKey(settings, 'gemini');
+        ensureCurrent();
+        data = await getJson(
+            `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(key)}`,
+            {}, 'Gemini');
         models = (data.models ?? [])
             .filter(model => model.supportedGenerationMethods?.includes('generateContent'))
             .map(model => ({id: model.name.replace(/^models\//, ''), name: model.displayName}));
     } else {
         const info = PROVIDERS.find(item => item.id === provider);
         const key = provider === 'vercel'
-            ? settings.get_string('vercel-api-key').trim()
-            : info?.key ? requiredKey(settings, info.key, info.name) : '';
+            ? await requiredKey(settings, 'vercel')
+            : info?.key ? await requiredKey(settings, provider) : '';
+        ensureCurrent();
         const endpoints = {
             groq: 'https://api.groq.com/openai/v1/models',
             openrouter: 'https://openrouter.ai/api/v1/models?output_modalities=text',
@@ -84,7 +132,7 @@ export async function fetchModels(settings, provider) {
             openai: 'https://api.openai.com/v1/models',
             vercel: 'https://ai-gateway.vercel.sh/v1/models',
         };
-        data = await getJson(endpoints[provider], key ? {Authorization: `Bearer ${key}`} : {});
+        data = await getJson(endpoints[provider], key ? {Authorization: `Bearer ${key}`} : {}, info.name);
         models = (data.data ?? [])
             .filter(model => model.type ? model.type === 'language' : true)
             .map(model => ({id: model.id, name: model.name ?? model.id}));

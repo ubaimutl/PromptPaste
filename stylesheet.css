@@ -14,3 +14,41 @@
 .promptpaste-result {
   padding: 8px;
 }
+
+.promptpaste-palette-title {
+  font-size: 1.15em;
+  font-weight: 700;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.promptpaste-palette-list {
+  min-width: 340px;
+  spacing: 4px;
+}
+
+.promptpaste-palette-item {
+  padding: 10px 12px;
+  border-radius: 9px;
+  text-align: left;
+}
+
+.promptpaste-palette-item:hover,
+.promptpaste-palette-item:focus,
+.promptpaste-palette-item:selected {
+  background-color: rgba(128, 128, 128, 0.24);
+}
+
+.promptpaste-palette-row {
+  spacing: 10px;
+}
+
+.promptpaste-palette-icon {
+  icon-size: 16px;
+}
+
+.promptpaste-palette-separator {
+  height: 1px;
+  margin: 6px 4px;
+  background-color: rgba(128, 128, 128, 0.35);
+}

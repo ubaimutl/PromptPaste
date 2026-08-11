@@ -28,6 +28,7 @@
     <key name="clipboard-fallback" type="b"><default>false</default></key>
     <key name="explicit-copy-apps" type="s"><default>'firefox'</default></key>
     <key name="pointer-feedback" type="b"><default>true</default></key>
+    <key name="action-palette-position" type="s"><default>'disabled'</default></key>
     <key name="variable-language" type="s"><default>'English'</default></key>
     <key name="variable-tone" type="s"><default>'professional'</default></key>
     <key name="variable-style" type="s"><default>'clear and concise'</default></key>
