@@ -9,6 +9,7 @@ Correct writing, rewrite text, translate, summarize, fix code, or create your ow
 ## Features
 
 - Correct and rewrite selected text
+- Run selected text directly as a prompt
 - Create unlimited custom actions
 - Use `${language}`, `${tone}`, `${style}`, and `${selection}` variables
 - Override provider and model per custom action
@@ -67,6 +68,8 @@ PromptPaste itself does not charge anything. Provider pricing and free-tier limi
 ## Custom actions
 
 Custom actions can use the active provider and model or override them individually.
+
+Each custom action can treat selected text as content to transform or as the user prompt itself. Prompt-mode actions send the exact selection as the user message and can add optional system guidance. The built-in Run selected prompt action can also override its provider, model, and token limits.
 
 They can also define optional input and output token limits.
 

@@ -18,6 +18,17 @@ function payload(text) {
     return `Transform only the text inside the tags.\nReturn only the transformed text.\n<text>\n${text}\n</text>`;
 }
 
+function messages(prompt, text, inputMode) {
+    const items = [];
+    if (prompt.trim())
+        items.push({role: 'system', content: prompt});
+    items.push({
+        role: 'user',
+        content: inputMode === 'prompt' ? text : payload(text),
+    });
+    return items;
+}
+
 function tokenLimit(value) {
     return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
@@ -31,8 +42,10 @@ function maxTokens(text, outputLimit = 0) {
         Math.min(2000, Math.max(220, estimateTokens(text) + 180));
 }
 
-function cleanOutput(text) {
+function cleanOutput(text, inputMode = 'transform') {
     let output = text.trim();
+    if (inputMode === 'prompt')
+        return output;
     const tagged = output.match(/^<text>\s*([\s\S]*?)\s*<\/text>$/i);
     if (tagged)
         output = tagged[1].trim();
@@ -67,13 +80,10 @@ function requestJson(session, url, headers, body, cancellable) {
     });
 }
 
-function openAiBody(model, prompt, text, outputLimit = 0, cerebras = false) {
+function openAiBody(model, prompt, text, inputMode, outputLimit = 0, cerebras = false) {
     const body = {
         model,
-        messages: [
-            {role: 'system', content: prompt},
-            {role: 'user', content: payload(text)},
-        ],
+        messages: messages(prompt, text, inputMode),
     };
     body[cerebras ? 'max_completion_tokens' : 'max_tokens'] = maxTokens(text, outputLimit);
     return body;
@@ -116,15 +126,15 @@ function networkError(error) {
 
 function outputLimitError() {
     return new Error(
-        'Response reached the output limit. Increase the output limit or select less text and try again.');
+        'Response reached the output limit. Try a custom action with a higher output limit, or select less text.');
 }
 
-function outputOrError(result, provider, model) {
+function outputOrError(result, provider, model, inputMode) {
     if (result.data?.choices?.[0]?.finish_reason === 'length')
         throw outputLimitError();
     const output = result.data?.choices?.[0]?.message?.content?.trim();
     if (output)
-        return cleanOutput(output);
+        return cleanOutput(output, inputMode);
     throw providerError(result, provider, model);
 }
 
@@ -151,34 +161,43 @@ export class AiClient {
 
     async transform(text, mode, customPrompt = null, options = {}) {
         this.cancel();
-        const inputLimit = mode === 'custom' ? tokenLimit(options.inputLimit) : 0;
+        const inputMode = mode === 'prompt' || options.inputMode === 'prompt'
+            ? 'prompt'
+            : 'transform';
+        const hasActionLimits = mode === 'custom' || mode === 'prompt';
+        const inputLimit = hasActionLimits ? tokenLimit(options.inputLimit) : 0;
         const estimatedTokens = estimateTokens(text);
         if (inputLimit && estimatedTokens > inputLimit) {
             throw new Error(
                 `Selected text is about ${estimatedTokens} tokens, above this action's ` +
                 `${inputLimit}-token input limit. Select less text or raise the limit.`);
         }
-        const outputLimit = mode === 'custom' ? tokenLimit(options.outputLimit) : 0;
+        let outputLimit = hasActionLimits ? tokenLimit(options.outputLimit) : 0;
+        if (inputMode === 'prompt' && !outputLimit)
+            outputLimit = 2000;
         this._cancellable = new Gio.Cancellable();
         const selectedProvider = options.provider || this._settings.get_string('provider');
         const provider = PROVIDER_NAMES[selectedProvider] ? selectedProvider : 'groq';
         const model = options.model || this._settings.get_string(`${provider}-model`);
-        const storedPrompt = this._settings.get_string(mode === 'rewrite' ? 'prompt-rewrite' : 'prompt-correct');
+        const promptKey = mode === 'rewrite'
+            ? 'prompt-rewrite'
+            : mode === 'prompt' ? 'prompt-run' : 'prompt-correct';
+        const storedPrompt = this._settings.get_string(promptKey);
         const prompt = this._expandPrompt(customPrompt ?? storedPrompt, text);
         try {
             if (provider === 'ollama')
-                return await this._ollama(text, prompt, model, outputLimit);
+                return await this._ollama(text, prompt, model, inputMode, outputLimit);
             if (provider === 'openai')
-                return await this._openAi(text, prompt, model, outputLimit);
+                return await this._openAi(text, prompt, model, inputMode, outputLimit);
             if (provider === 'gemini')
-                return await this._gemini(text, prompt, model, outputLimit);
+                return await this._gemini(text, prompt, model, inputMode, outputLimit);
             if (provider === 'openrouter')
-                return await this._openRouter(text, prompt, model, outputLimit);
+                return await this._openRouter(text, prompt, model, inputMode, outputLimit);
             if (provider === 'vercel')
-                return await this._vercel(text, prompt, model, outputLimit);
+                return await this._vercel(text, prompt, model, inputMode, outputLimit);
             if (provider === 'cerebras')
-                return await this._cerebras(text, prompt, model, outputLimit);
-            return await this._groq(text, prompt, model, outputLimit);
+                return await this._cerebras(text, prompt, model, inputMode, outputLimit);
+            return await this._groq(text, prompt, model, inputMode, outputLimit);
         } catch (error) {
             throw networkError(error);
         }
@@ -202,9 +221,9 @@ export class AiClient {
         return value;
     }
 
-    async _groq(text, prompt, model, outputLimit) {
+    async _groq(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('groq');
-        const body = openAiBody(model, prompt, text, outputLimit);
+        const body = openAiBody(model, prompt, text, inputMode, outputLimit);
         if (model.startsWith('openai/gpt-oss-')) {
             body.reasoning_effort = 'low';
             body.include_reasoning = false;
@@ -213,17 +232,14 @@ export class AiClient {
             'https://api.groq.com/openai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
             body, this._cancellable);
-        return outputOrError(result, 'groq', model);
+        return outputOrError(result, 'groq', model, inputMode);
     }
 
-    async _ollama(text, prompt, model, outputLimit) {
+    async _ollama(text, prompt, model, inputMode, outputLimit) {
         const baseUrl = this._settings.get_string('ollama-url').replace(/\/$/, '');
         const body = {
             model,
-            messages: [
-                {role: 'system', content: prompt},
-                {role: 'user', content: payload(text)},
-            ],
+            messages: messages(prompt, text, inputMode),
             stream: false,
         };
         if (outputLimit)
@@ -234,61 +250,66 @@ export class AiClient {
             throw outputLimitError();
         const output = result.data?.message?.content?.trim();
         if (output)
-            return cleanOutput(output);
+            return cleanOutput(output, inputMode);
         throw providerError(result, 'ollama', model);
     }
 
-    async _openAi(text, prompt, model, outputLimit) {
+    async _openAi(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('openai');
         const result = await requestJson(this._session,
             'https://api.openai.com/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text, outputLimit), this._cancellable);
-        return outputOrError(result, 'openai', model);
+            openAiBody(model, prompt, text, inputMode, outputLimit), this._cancellable);
+        return outputOrError(result, 'openai', model, inputMode);
     }
 
-    async _gemini(text, prompt, model, outputLimit) {
+    async _gemini(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('gemini');
         const encodedModel = encodeURIComponent(model);
+        const body = {
+            contents: [{
+                role: 'user',
+                parts: [{text: inputMode === 'prompt' ? text : payload(text)}],
+            }],
+            generationConfig: {maxOutputTokens: maxTokens(text, outputLimit)},
+        };
+        if (prompt.trim())
+            body.systemInstruction = {parts: [{text: prompt}]};
         const result = await requestJson(this._session,
             `https://generativelanguage.googleapis.com/v1beta/models/${encodedModel}:generateContent?key=${encodeURIComponent(key)}`,
-            {}, {
-                systemInstruction: {parts: [{text: prompt}]},
-                contents: [{role: 'user', parts: [{text: payload(text)}]}],
-                generationConfig: {maxOutputTokens: maxTokens(text, outputLimit)},
-            }, this._cancellable);
+            {}, body, this._cancellable);
         if (result.data?.candidates?.[0]?.finishReason === 'MAX_TOKENS')
             throw outputLimitError();
         const output = result.data?.candidates?.[0]?.content?.parts?.map(part => part.text ?? '').join('').trim();
         if (output)
-            return cleanOutput(output);
+            return cleanOutput(output, inputMode);
         throw providerError(result, 'gemini', model);
     }
 
-    async _openRouter(text, prompt, model, outputLimit) {
+    async _openRouter(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('openrouter');
         const result = await requestJson(this._session,
             'https://openrouter.ai/api/v1/chat/completions',
             {Authorization: `Bearer ${key}`, 'X-Title': 'PromptPaste'},
-            openAiBody(model, prompt, text, outputLimit), this._cancellable);
-        return outputOrError(result, 'openrouter', model);
+            openAiBody(model, prompt, text, inputMode, outputLimit), this._cancellable);
+        return outputOrError(result, 'openrouter', model, inputMode);
     }
 
-    async _vercel(text, prompt, model, outputLimit) {
+    async _vercel(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('vercel');
         const result = await requestJson(this._session,
             'https://ai-gateway.vercel.sh/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text, outputLimit), this._cancellable);
-        return outputOrError(result, 'vercel', model);
+            openAiBody(model, prompt, text, inputMode, outputLimit), this._cancellable);
+        return outputOrError(result, 'vercel', model, inputMode);
     }
 
-    async _cerebras(text, prompt, model, outputLimit) {
+    async _cerebras(text, prompt, model, inputMode, outputLimit) {
         const key = await this._required('cerebras');
         const result = await requestJson(this._session,
             'https://api.cerebras.ai/v1/chat/completions',
             {Authorization: `Bearer ${key}`},
-            openAiBody(model, prompt, text, outputLimit, true), this._cancellable);
-        return outputOrError(result, 'cerebras', model);
+            openAiBody(model, prompt, text, inputMode, outputLimit, true), this._cancellable);
+        return outputOrError(result, 'cerebras', model, inputMode);
     }
 }

@@ -76,6 +76,23 @@ function tokenLimitControl(title, subtitle, values, labels, currentValue) {
     };
 }
 
+function bindTokenLimit(settings, key, control, values) {
+    control.row.connect('notify::selected', () => {
+        if (control.row.selected < values.length)
+            settings.set_int64(key, values[control.row.selected]);
+    });
+    const saveCustom = () => {
+        if (control.row.selected !== values.length)
+            return;
+        const value = control.value();
+        if (value !== null)
+            settings.set_int64(key, value);
+    };
+    control.custom.show_apply_button = true;
+    control.custom.connect('apply', saveCustom);
+    control.custom.connect('entry-activated', saveCustom);
+}
+
 export default class PromptPastePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
@@ -100,6 +117,53 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             settings.set_string('provider', selected.id);
             this._renderProviderSettings(settings);
         });
+
+        const runPrompt = new Adw.PreferencesGroup({
+            title: 'Run selected prompt',
+            description: 'Selected text is sent directly as the user instruction.',
+        });
+        const runProviderIds = ['', ...PROVIDERS.map(item => item.id)];
+        const runProvider = new Adw.ComboRow({
+            title: 'Provider override',
+            model: Gtk.StringList.new([
+                'Use active provider',
+                ...PROVIDERS.map(item => item.name),
+            ]),
+        });
+        runProvider.selected = Math.max(0,
+            runProviderIds.indexOf(settings.get_string('prompt-run-provider')));
+        const runModel = new Adw.EntryRow({
+            title: 'Model override (optional)',
+            text: settings.get_string('prompt-run-model'),
+            sensitive: runProvider.selected > 0,
+        });
+        settings.bind('prompt-run-model', runModel, 'text', Gio.SettingsBindFlags.DEFAULT);
+        runProvider.connect('notify::selected', () => {
+            settings.set_string('prompt-run-provider',
+                runProviderIds[runProvider.selected] ?? '');
+            runModel.sensitive = runProvider.selected > 0;
+        });
+        const runInputLimit = tokenLimitControl(
+            'Input limit',
+            'Stops before sending when the selected prompt is over this estimate.',
+            INPUT_LIMIT_VALUES,
+            INPUT_LIMIT_LABELS,
+            settings.get_int64('prompt-run-input-limit'));
+        bindTokenLimit(settings, 'prompt-run-input-limit', runInputLimit, INPUT_LIMIT_VALUES);
+        const runOutputLimit = tokenLimitControl(
+            'Output limit',
+            'Auto allows responses up to 2000 tokens.',
+            OUTPUT_LIMIT_VALUES,
+            OUTPUT_LIMIT_LABELS,
+            settings.get_int64('prompt-run-output-limit'));
+        bindTokenLimit(settings, 'prompt-run-output-limit', runOutputLimit, OUTPUT_LIMIT_VALUES);
+        runPrompt.add(runProvider);
+        runPrompt.add(runModel);
+        runPrompt.add(runInputLimit.row);
+        runPrompt.add(runInputLimit.custom);
+        runPrompt.add(runOutputLimit.row);
+        runPrompt.add(runOutputLimit.custom);
+        page.add(runPrompt);
 
         const actions = new Adw.PreferencesGroup({
             title: 'Custom actions',
@@ -168,6 +232,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const prompts = new Adw.PreferencesGroup({title: 'Prompts'});
         entry(prompts, settings, 'prompt-correct', 'Correction prompt');
         entry(prompts, settings, 'prompt-rewrite', 'Rewrite prompt');
+        entry(prompts, settings, 'prompt-run', 'Run-prompt system guidance');
         page.add(prompts);
 
         const variables = new Adw.PreferencesGroup({
@@ -399,9 +464,12 @@ export default class PromptPastePreferences extends ExtensionPreferences {
                 ? `Limits: input ${formatTokenLimit(action.inputLimit)}, ` +
                     `output ${formatTokenLimit(action.outputLimit)}`
                 : '';
+            const mode = action.inputMode === 'prompt'
+                ? 'Uses selected text as the prompt'
+                : '';
             const row = new Adw.ActionRow({
                 title: action.name,
-                subtitle: [override, limits, promptPreview(action.prompt)]
+                subtitle: [override, mode, limits, promptPreview(action.prompt)]
                     .filter(Boolean).join('\n'),
                 subtitle_lines: 4,
                 use_markup: false,
@@ -472,6 +540,15 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         const page = new Adw.PreferencesPage();
         const fields = new Adw.PreferencesGroup({title: action ? 'Edit action' : 'New action'});
         const name = new Adw.EntryRow({title: 'Name', text: action?.name ?? ''});
+        const inputMode = new Adw.ComboRow({
+            title: 'Input mode',
+            subtitle: 'Transform the selection or use it directly as the user instruction.',
+            model: Gtk.StringList.new([
+                'Transform selected text',
+                'Use selected text as prompt',
+            ]),
+            selected: action?.inputMode === 'prompt' ? 1 : 0,
+        });
         const promptBuffer = new Gtk.TextBuffer();
         promptBuffer.set_text(action?.prompt ?? '', -1);
         const promptView = new Gtk.TextView({
@@ -511,6 +588,15 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             title: 'Prompt',
             child: promptBox,
         });
+        const updatePromptLabel = () => {
+            const title = inputMode.selected === 1
+                ? 'System guidance (optional)'
+                : 'Transformation prompt';
+            prompt.title = title;
+            promptLabel.label = title;
+        };
+        inputMode.connect('notify::selected', updatePromptLabel);
+        updatePromptLabel();
         const providerNames = ['Use active provider', ...PROVIDERS.map(item => item.name)];
         const provider = new Adw.ComboRow({
             title: 'Provider override',
@@ -543,6 +629,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             active: action?.enabled !== false,
         });
         fields.add(name);
+        fields.add(inputMode);
         fields.add(prompt);
         fields.add(provider);
         fields.add(model);
@@ -594,7 +681,8 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             const actionName = name.text.trim();
             const [promptStart, promptEnd] = promptBuffer.get_bounds();
             const actionPrompt = promptBuffer.get_text(promptStart, promptEnd, false).trim();
-            if (!actionName || !actionPrompt)
+            const inputModeValue = inputMode.selected === 1 ? 'prompt' : 'transform';
+            if (!actionName || (inputModeValue === 'transform' && !actionPrompt))
                 return;
             const inputLimitValue = inputLimit.value();
             const outputLimitValue = outputLimit.value();
@@ -609,6 +697,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
                 enabled: visible.active,
                 provider: providerId,
                 model: providerId ? model.text.trim() : '',
+                inputMode: inputModeValue,
                 inputLimit: inputLimitValue,
                 outputLimit: outputLimitValue,
             };

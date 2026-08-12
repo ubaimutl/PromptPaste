@@ -123,8 +123,8 @@ class ActionPalette extends ModalDialog.ModalDialog {
             : {vertical: true, style_class: 'promptpaste-palette-list'});
         this.contentLayout.add_child(list);
 
-        actions.forEach((action, index) => {
-            if (index === 2) {
+        actions.forEach(action => {
+            if (action.separatorBefore) {
                 list.add_child(new St.Widget({
                     style_class: 'promptpaste-palette-separator',
                     x_expand: true,
@@ -240,6 +240,10 @@ export default class PromptPasteExtension extends Extension {
         rewrite.connect('activate', () => this._run('rewrite'));
         this._indicator.menu.addMenuItem(rewrite);
 
+        const runPrompt = new PopupMenu.PopupMenuItem('Run selected prompt');
+        runPrompt.connect('activate', () => this._run('prompt'));
+        this._indicator.menu.addMenuItem(runPrompt);
+
         this._actionsSection = new PopupMenu.PopupMenuSection();
         this._indicator.menu.addMenuItem(this._actionsSection);
         this._rebuildActions();
@@ -335,6 +339,7 @@ export default class PromptPasteExtension extends Extension {
                 {
                     provider: action.provider,
                     model: action.model,
+                    inputMode: action.inputMode,
                     inputLimit: action.inputLimit,
                     outputLimit: action.outputLimit,
                 }));
@@ -354,17 +359,20 @@ export default class PromptPasteExtension extends Extension {
         const actions = [
             {name: 'Correct selected text', mode: 'correct', icon: 'tools-check-spelling-symbolic'},
             {name: 'Rewrite selected text', mode: 'rewrite', icon: 'document-edit-symbolic'},
+            {name: 'Run selected prompt', mode: 'prompt', icon: 'system-run-symbolic'},
             ...readActions(this._settings)
                 .filter(action => action.enabled)
-                .map(action => ({
+                .map((action, index) => ({
                     name: action.name,
                     mode: 'custom',
                     prompt: action.prompt,
                     provider: action.provider,
                     model: action.model,
+                    inputMode: action.inputMode,
                     inputLimit: action.inputLimit,
                     outputLimit: action.outputLimit,
                     icon: 'system-run-symbolic',
+                    separatorBefore: index === 0,
                 })),
         ];
 
@@ -376,6 +384,7 @@ export default class PromptPasteExtension extends Extension {
                     {
                         provider: action.provider ?? '',
                         model: action.model ?? '',
+                        inputMode: action.inputMode ?? 'transform',
                         inputLimit: action.inputLimit ?? 0,
                         outputLimit: action.outputLimit ?? 0,
                     }),
@@ -407,8 +416,9 @@ export default class PromptPasteExtension extends Extension {
         };
         addAction('Correct selected text', () => this._run('correct'));
         addAction('Rewrite selected text', () => this._run('rewrite'));
+        addAction('Run selected prompt', () => this._run('prompt'));
 
-        const customActions = actions.slice(2);
+        const customActions = actions.slice(3);
         if (customActions.length > 0)
             palette.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         for (const action of customActions) {
@@ -417,6 +427,7 @@ export default class PromptPasteExtension extends Extension {
                 {
                     provider: action.provider,
                     model: action.model,
+                    inputMode: action.inputMode,
                     inputLimit: action.inputLimit,
                     outputLimit: action.outputLimit,
                 }));
@@ -441,6 +452,15 @@ export default class PromptPasteExtension extends Extension {
         }
     }
 
+    _promptOptions() {
+        return {
+            provider: this._settings.get_string('prompt-run-provider'),
+            model: this._settings.get_string('prompt-run-model'),
+            inputLimit: this._settings.get_int64('prompt-run-input-limit'),
+            outputLimit: this._settings.get_int64('prompt-run-output-limit'),
+        };
+    }
+
     async _run(mode, customPrompt = null, actionName = null, options = {}) {
         if (this._busy)
             return;
@@ -456,7 +476,8 @@ export default class PromptPasteExtension extends Extension {
                 return;
             if (!text.trim())
                 throw new Error('Select text first.');
-            const output = await client.transform(text, mode, customPrompt, options);
+            const requestOptions = mode === 'prompt' ? this._promptOptions() : options;
+            const output = await client.transform(text, mode, customPrompt, requestOptions);
             if (this._client !== client)
                 return;
             if (this._settings.get_boolean('preview-results'))
@@ -464,7 +485,9 @@ export default class PromptPasteExtension extends Extension {
             else
                 this._replace(
                     output, false,
-                    actionName ?? (mode === 'rewrite' ? 'Rewritten' : 'Corrected'),
+                    actionName ?? (mode === 'rewrite'
+                        ? 'Rewritten'
+                        : mode === 'prompt' ? 'Generated' : 'Corrected'),
                     focusedWindow, selection.primaryText);
         } catch (error) {
             if (this._client !== client)
