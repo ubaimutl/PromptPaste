@@ -97,19 +97,30 @@ export default class PromptPastePreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         const settings = this.getSettings();
         this._keyCancellable = new Gio.Cancellable();
-        const page = new Adw.PreferencesPage();
+        const generalPage = new Adw.PreferencesPage({
+            title: 'General',
+            icon_name: 'preferences-system-symbolic',
+        });
+        const actionsPage = new Adw.PreferencesPage({
+            title: 'Actions',
+            icon_name: 'system-run-symbolic',
+        });
+        const promptsPage = new Adw.PreferencesPage({
+            title: 'Prompts',
+            icon_name: 'document-edit-symbolic',
+        });
 
         const providerGroup = new Adw.PreferencesGroup({title: 'Provider'});
         const model = Gtk.StringList.new(PROVIDERS.map(item => item.name));
         const provider = new Adw.ComboRow({title: 'Active provider', model});
         provider.selected = Math.max(0, PROVIDERS.findIndex(item => item.id === settings.get_string('provider')));
         providerGroup.add(provider);
-        page.add(providerGroup);
+        generalPage.add(providerGroup);
 
         this._providerSettings = new Adw.PreferencesGroup({title: 'Provider settings'});
         this._providerRows = [];
         this._renderProviderSettings(settings);
-        page.add(this._providerSettings);
+        generalPage.add(this._providerSettings);
         provider.connect('notify::selected', () => {
             const selected = PROVIDERS[provider.selected];
             if (!selected)
@@ -163,7 +174,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         runPrompt.add(runInputLimit.custom);
         runPrompt.add(runOutputLimit.row);
         runPrompt.add(runOutputLimit.custom);
-        page.add(runPrompt);
+        actionsPage.add(runPrompt);
 
         const actions = new Adw.PreferencesGroup({
             title: 'Custom actions',
@@ -172,7 +183,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         this._actionsGroup = actions;
         this._actionRows = [];
         this._renderActions(settings);
-        page.add(actions);
+        actionsPage.add(actions);
 
         const shortcuts = new Adw.PreferencesGroup({
             title: 'Shortcuts',
@@ -194,7 +205,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
                 palettePositions[actionPalette.selected] ?? 'disabled');
         });
         shortcuts.add(actionPalette);
-        page.add(shortcuts);
+        generalPage.add(shortcuts);
 
         const capture = new Adw.PreferencesGroup({
             title: 'Selection capture',
@@ -206,9 +217,8 @@ export default class PromptPastePreferences extends ExtensionPreferences {
                 'copies text there.',
         });
         entry(capture, settings, 'explicit-copy-apps', 'Compatibility apps');
-        page.add(capture);
 
-        const behavior = new Adw.PreferencesGroup({title: 'Result'});
+        const behavior = new Adw.PreferencesGroup({title: 'Behavior'});
         const preview = new Adw.SwitchRow({
             title: 'Preview before replacing',
             subtitle: 'Confirm, copy, or cancel the generated result.',
@@ -227,13 +237,14 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         });
         settings.bind('pointer-feedback', pointerFeedback, 'active', Gio.SettingsBindFlags.DEFAULT);
         behavior.add(pointerFeedback);
-        page.add(behavior);
+        generalPage.add(behavior);
+        generalPage.add(capture);
 
-        const prompts = new Adw.PreferencesGroup({title: 'Prompts'});
+        const prompts = new Adw.PreferencesGroup({title: 'Built-in prompts'});
         entry(prompts, settings, 'prompt-correct', 'Correction prompt');
         entry(prompts, settings, 'prompt-rewrite', 'Rewrite prompt');
         entry(prompts, settings, 'prompt-run', 'Run-prompt system guidance');
-        page.add(prompts);
+        promptsPage.add(prompts);
 
         const variables = new Adw.PreferencesGroup({
             title: 'Prompt variables',
@@ -242,7 +253,7 @@ export default class PromptPastePreferences extends ExtensionPreferences {
         entry(variables, settings, 'variable-language', 'Language');
         entry(variables, settings, 'variable-tone', 'Tone');
         entry(variables, settings, 'variable-style', 'Style');
-        page.add(variables);
+        promptsPage.add(variables);
 
         window.connect('close-request', () => {
             abortModelRequests();
@@ -255,7 +266,9 @@ export default class PromptPastePreferences extends ExtensionPreferences {
             this._actionRows = null;
             return false;
         });
-        window.add(page);
+        window.add(generalPage);
+        window.add(actionsPage);
+        window.add(promptsPage);
     }
 
     _renderProviderSettings(settings) {
