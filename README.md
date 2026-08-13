@@ -44,12 +44,22 @@ After installation, open the extension settings to choose your provider, model, 
 ```bash
 git clone https://github.com/ubaimutl/PromptPaste.git
 cd PromptPaste
-gnome-extensions pack --force
-gnome-extensions install --force promptpaste*.zip
-gnome-extensions enable ai-autocorrect@ubai.dev
+gnome-extensions pack --force \
+  --extra-source=actions.js \
+  --extra-source=ai.js \
+  --extra-source=models.js \
+  --extra-source=secrets.js \
+  --extra-source=stylesheet.css \
+  --extra-source=icons \
+  --schema=schemas/org.gnome.shell.extensions.ai-autocorrect.gschema.xml
+gnome-extensions install --force ai-autocorrect@ubai.dev.shell-extension.zip
 ```
 
-Log out and back in if the extension does not appear immediately.
+Log out and back in, then enable the extension:
+
+```bash
+gnome-extensions enable ai-autocorrect@ubai.dev
+```
 
 ## Providers
 
